@@ -57,6 +57,11 @@ def is_installed(function: Callable) -> bool:
     return bool(getattr(function, _MARK, False))
 
 
+def original_of(function: Callable) -> Callable:
+    """The host's own function behind a phost dispatch (or ``function`` itself when nothing is installed)."""
+    return getattr(function, "__phost_original__", function)
+
+
 @contextmanager
 def install(point: PatchPoint, make_dispatch: Callable[[Callable], Callable],
             require: Iterable[str] = ()) -> Iterator[Callable]:
@@ -73,6 +78,7 @@ def install(point: PatchPoint, make_dispatch: Callable[[Callable], Callable],
         dispatch = make_dispatch(original)
         try:
             setattr(dispatch, _MARK, True)
+            setattr(dispatch, "__phost_original__", original)
         except (AttributeError, TypeError) as error:
             raise GuardError(f"{point.target.label}: dispatch cannot be marked as installed: {error}") from error
         point.target.set(dispatch)

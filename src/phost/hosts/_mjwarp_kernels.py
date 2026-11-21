@@ -72,3 +72,22 @@ def mark_mass(refactor: wp.array(dtype=wp.int32), rows: wp.array(dtype=wp.int32)
     if mass[w, element[e]] != 0.0:
         flag[w, rows[e]] = 1
         flag[w, cols[e]] = 1
+
+
+@wp.kernel
+def gather_scalar_q(qpos: wp.array2d[float], dof_qposadr: wp.array[int], q: wp.array2d[float]):
+    """q[world, dof] = qpos at the DOF's joint when that joint is a scalar (hinge, slide), else 0."""
+    w, i = wp.tid()
+    adr = dof_qposadr[i]
+    if adr >= 0:
+        q[w, i] = qpos[w, adr]
+    else:
+        q[w, i] = 0.0
+
+
+@wp.kernel
+def add_scalar_force(scalar: wp.array[int], force: wp.array2d[float], qfrc_passive: wp.array2d[float]):
+    """Add force to the host's passive generalized force on scalar DOFs only."""
+    w, i = wp.tid()
+    if scalar[i] == 1:
+        qfrc_passive[w, i] = qfrc_passive[w, i] + force[w, i]

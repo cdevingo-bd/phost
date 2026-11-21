@@ -15,8 +15,11 @@ import numpy as np
 from ..errors import CapabilityError
 from ..guard import Guard, source_hash
 from ..host import Capability, Host, HostInfo, ModelFacts, StageBinding
-from ..patch import PatchPoint, Target
+from ..patch import PatchPoint, Target, original_of
+from ..stages import control_law as cl
+from ..stages import dof_passive_force as pf
 from ..stages import newton_linear as nl
+from ..stages import probe_state as ps
 
 SENTINEL = 123.0
 
@@ -37,24 +40,63 @@ def _assemble(m, d, ctx):
     return ctx.h
 
 
+# The fake host's own physics for the pointwise stages. Simple on purpose, but wired like a real host:
+# forward() looks its steps up on ``ns`` at call time, so patching an entry changes what forward() does.
+DAMPING = 0.1                         # native passive damping on every DOF
+GAIN, BIAS_LENGTH, BIAS_VELOCITY = 2.0, -0.5, -0.05   # native actuator: force = GAIN ctrl + bias terms
+
+
+def _native_passive(m, d):
+    d.qfrc_passive[:] = (-DAMPING * d.qvel).astype(np.float32)
+
+
+def _native_actuation(m, d):
+    d.actuator_force[:] = (GAIN * d.ctrl.astype(np.float64) + BIAS_LENGTH * d.actuator_length
+                           + BIAS_VELOCITY * d.actuator_velocity).astype(np.float32)
+
+
+def _native_forward(m, d, ns=None):
+    nu = m.nu
+    d.actuator_length[:] = d.qpos[:, :nu]
+    d.actuator_velocity[:] = d.qvel[:, :nu]
+    ns.passive(m, d)
+    ns.fwd_actuation(m, d)
+    pad = np.zeros_like(d.qvel)
+    pad[:, :nu] = d.actuator_force
+    d.qacc[:] = -d.qpos + d.qfrc_passive + pad
+
+
 class FakeHost(Host):
     info = HostInfo(name="fake", version="1", build_id="fake-build-1", patched=False)
     capabilities = Capability.PATCH | Capability.NATIVE
 
-    def __init__(self, nv: int = 12, world_count: int = 4, nv_pad: int = 16, seed: int = 0, coupled: int = 4):
-        self.ns = SimpleNamespace(solve_hook=_native_solve, assemble=_assemble)
-        self.model = SimpleNamespace(nv=nv, nv_pad=nv_pad)
-        self.other_model = SimpleNamespace(nv=nv, nv_pad=nv_pad)
-        self.data = SimpleNamespace(nworld=world_count)
+    def __init__(self, nv: int = 12, world_count: int = 4, nv_pad: int = 16, seed: int = 0, coupled: int = 4,
+                 nu: int = 3):
+        self.ns = SimpleNamespace(solve_hook=_native_solve, assemble=_assemble, passive=_native_passive,
+                                  fwd_actuation=_native_actuation)
+        self.ns.forward = lambda m, d: _native_forward(m, d, self.ns)
+        scalar = np.ones(nv, np.int32)
+        scalar[-3:] = 0                                  # the last DOFs stand in for a free joint
+        self.model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar)
+        self.other_model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar)
+        f32 = lambda *shape: np.zeros(shape, np.float32)
+        self.data = SimpleNamespace(nworld=world_count, qpos=f32(world_count, nv), qvel=f32(world_count, nv),
+                                    qacc=f32(world_count, nv), time=f32(world_count), ctrl=f32(world_count, nu),
+                                    qfrc_passive=f32(world_count, nv), actuator_length=f32(world_count, nu),
+                                    actuator_velocity=f32(world_count, nu), actuator_force=f32(world_count, nu))
+        self._buffers: dict = {}
         self.rng = np.random.default_rng(seed)
         self.coupled = coupled
         self._reviewed_hook = source_hash(self.ns.solve_hook)
         self._reviewed_assemble = source_hash(self.ns.assemble)
+        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward")}
         self._stages = None
 
     # -- Host ---------------------------------------------------------------------------------
     def facts(self) -> ModelFacts:
-        return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu")
+        return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu",
+                          extra=dict(nq=self.model.nq, nu=self.model.nu, nhistory=0,
+                                     scalar_dofs=int(self.model.scalar.sum())))
 
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, ns=self.ns)
@@ -70,7 +112,25 @@ class FakeHost(Host):
             })
             self._stages = {nl.NAME: StageBinding(nl.CONTRACT, point, _make_dispatch,
                                                   extensions={"structure_hint": "assembly", "fallback": None})}
+            for contract, attribute, make in ((pf.CONTRACT, "passive", _passive_dispatch),
+                                              (cl.CONTRACT, "fwd_actuation", _control_dispatch),
+                                              (ps.CONTRACT, "forward", _probe_dispatch)):
+                self._stages[contract.name] = StageBinding(contract, self._point(contract.name, attribute), make)
         return self._stages
+
+    def _point(self, stage, attribute):
+        ns = self.ns
+        target = Target(f"fake.ns.{attribute}", lambda: getattr(ns, attribute), lambda f: setattr(ns, attribute, f))
+        return PatchPoint(stage, target, {"target": Guard(
+            "target", lambda: source_hash(getattr(ns, attribute)), {self._reviewed[attribute]: "fake build 1"},
+            f"the {attribute} function being wrapped")})
+
+    def buffer(self, name, shape, dtype=np.float32):
+        """A host-owned output buffer, created once per (name, shape)."""
+        key = (name, tuple(shape))
+        if key not in self._buffers:
+            self._buffers[key] = np.zeros(shape, dtype)
+        return self._buffers[key]
 
     # -- driving a call, for tests and conformance --------------------------------------------
     def make_ctx(self, active=None, *, quad=None, state=None):
@@ -93,10 +153,10 @@ class FakeHost(Host):
             quad_changed_count=np.ones(worlds, np.int32) if quad is None else np.asarray(quad, np.int32),
             state_changed_count=np.ones(worlds, np.int32) if state is None else np.asarray(state, np.int32))
 
-    def drive(self, stage: str, *, owned: bool = True, active=None, skip_unchanged=False, skip_noflip=False):
+    def drive(self, stage: str, *, owned: bool = True, active=None, skip_unchanged=False, skip_noflip=False, seed: int = 0):
         """Run one call of ``stage`` through whatever is installed. Returns inputs, outputs, nv."""
         if stage != nl.NAME:
-            raise CapabilityError(f"fake host drives only {nl.NAME}")
+            return self._drive_forward(stage, owned=owned, seed=seed)
         ctx = self.make_ctx(active)
         before = copy.deepcopy(ctx)
         self.ns.solve_hook(self.model if owned else self.other_model, self.data, ctx, skip_unchanged, skip_noflip)
@@ -106,6 +166,29 @@ class FakeHost(Host):
                     after=dict(h=ctx.h, grad=ctx.grad),
                     outputs=dict(search=ctx.search, search_dot=ctx.search_dot, newton_decrement=ctx.newton_decrement),
                     nv=self.model.nv, active=act)
+
+
+    def _drive_forward(self, stage, *, owned, seed):
+        """Run one forward() on a random state, return what the host did with the stage's output."""
+        if stage not in (pf.NAME, cl.NAME, ps.NAME):
+            raise CapabilityError(f"fake host cannot drive {stage}")
+        rng, d, m = np.random.default_rng(seed), self.data, self.model
+        for name in ("qpos", "qvel", "ctrl"):
+            getattr(d, name)[:] = rng.standard_normal(getattr(d, name).shape).astype(np.float32)
+        d.time[:] = rng.uniform(0, 5, d.nworld).astype(np.float32)
+        for name in ("qacc", "qfrc_passive", "actuator_force"):
+            getattr(d, name)[:] = SENTINEL
+        baseline = copy.deepcopy(d)
+        original_of(self.ns.passive)(m, baseline)
+        self.ns.forward(m if owned else self.other_model, d)
+        effect = None
+        if stage == pf.NAME:
+            effect = dict(delta=d.qfrc_passive.astype(np.float64) - baseline.qfrc_passive.astype(np.float64))
+        elif stage == cl.NAME:
+            ctrl = d.ctrl.astype(np.float64)
+            effect = dict(actuator_force=d.actuator_force, expected_actuator_force=(
+                GAIN * ctrl + BIAS_LENGTH * d.actuator_length + BIAS_VELOCITY * d.actuator_velocity))
+        return dict(effect=effect, nv=m.nv)
 
 
 def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
@@ -135,5 +218,39 @@ def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
                         flags[w, :m.nv] = ((np.abs(sym - np.diag(np.diag(sym))).sum(axis=1)) > 0).astype(flags.dtype)
             system.structure_hint = hint
         runtime.solve(system)
+
+    return dispatch
+
+
+def _passive_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
+    def dispatch(m, d):
+        original(m, d)
+        if m is not host.model:
+            return
+        scalar = m.scalar.astype(bool)
+        q = np.where(scalar, d.qpos[:, :m.nv], 0.0).astype(np.float32)
+        force = np.zeros_like(d.qvel)
+        runtime.apply(pf.DofForceSystem(q=q, v=d.qvel, time=d.time, scalar=m.scalar, force=force))
+        d.qfrc_passive += np.where(scalar, force, 0.0).astype(np.float32)
+
+    return dispatch
+
+
+def _control_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
+    def dispatch(m, d):
+        if m is host.model:
+            runtime.apply(cl.ControlSystem(length=d.actuator_length, velocity=d.actuator_velocity, time=d.time, ctrl=d.ctrl))
+        original(m, d)
+
+    return dispatch
+
+
+def _probe_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
+    value = host.buffer(f"probe/{runtime.width}", (host.data.nworld, runtime.width))
+
+    def dispatch(m, d):
+        original(m, d)
+        if m is host.model:
+            runtime.observe(ps.ProbeSystem(qpos=d.qpos, qvel=d.qvel, qacc=d.qacc, time=d.time, value=value))
 
     return dispatch

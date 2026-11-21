@@ -9,10 +9,21 @@ import numpy as np
 
 from ..registry import Registry, default
 from ..session import Selection, Session
-from ..stage import StageContract
+from ..stage import Role, StageContract
+from ..stages import control_law as cl
+from ..stages import dof_passive_force as pf
 from ..stages import newton_linear as nl
+from ..stages import probe_state as ps
 
 EVALUATORS: dict[str, Callable] = {nl.NAME: nl.evaluate}
+
+# Stages judged by recording what the runtime was handed and what it returned (everything but the Newton solve,
+# whose driver observes the host hook directly). stage name -> (runtime method, evaluate)
+RECORDED: dict[str, tuple[str, Callable]] = {
+    pf.NAME: ("apply", pf.evaluate),
+    cl.NAME: ("apply", cl.evaluate),
+    ps.NAME: ("observe", ps.evaluate),
+}
 
 
 @dataclass
@@ -39,11 +50,15 @@ def _defined(name, array, nv):
 def check_impl(host, selection: Selection, registry: Registry | None = None, *, calls=None) -> Verdict:
     """Install ``selection`` on ``host``, drive calls, and check every contract rule.
 
-    ``calls`` is a list of keyword dicts for ``host.drive`` (default: a few skip/active patterns).
-    Checks: tolerances, inputs unchanged, inactive outputs untouched, outputs finite.
+    ``calls`` is a list of keyword dicts for ``host.drive`` (default: a few skip/active patterns for the Newton
+    solve, a few seeds for the other stages).
+    Checks: tolerances, inputs unchanged, outputs finite, repeatable, plus the stage's own rules (inactive
+    outputs untouched for the Newton solve; the host-side effect and the implementation's float64 law for the rest).
     """
     registry = registry or default
     contract: StageContract = registry.contract(selection.stage, registry.impl(selection.impl).stage_version)
+    if contract.name in RECORDED:
+        return _check_recorded(host, selection, registry, contract, calls)
     evaluate = EVALUATORS[contract.name]
     calls = calls or [dict(), dict(active=[1, 0] + [1] * (host.data.nworld - 2)), dict(skip_unchanged=True, skip_noflip=True)]
     verdict = Verdict(contract.name, selection.impl, True)
@@ -71,6 +86,88 @@ def check_impl(host, selection: Selection, registry: Registry | None = None, *, 
     for gate in contract.tolerances:
         value = worst.get(gate.metric)
         if value is None or not value <= gate.max:
+            verdict.failures.append(f"{gate.metric} = {value} exceeds {gate.max}")
+    verdict.ok = not verdict.failures
+    return verdict
+
+
+# ---- stages judged by recording the runtime's calls -------------------------------------------------
+
+def _array(value):
+    """A numpy copy of a numpy or Warp array."""
+    if hasattr(value, "numpy"):
+        import warp as wp
+        wp.synchronize()
+        return value.numpy().copy()
+    return np.array(value, copy=True)
+
+
+class _Recorder:
+    """Wraps one method of a runtime and keeps, for every call, its inputs before and after and its outputs."""
+
+    def __init__(self, runtime, method: str, contract: StageContract):
+        self.calls: list[dict] = []
+        original = getattr(runtime, method)
+
+        def wrapper(system):
+            ins = [p.name for p in contract.ports if p.role is Role.IN]
+            outs = [p.name for p in contract.ports if p.role is not Role.IN]
+            before = {name: _array(getattr(system, name)) for name in ins}
+            original(system)
+            self.calls.append(dict(inputs=before, after={name: _array(getattr(system, name)) for name in ins},
+                                   outputs={name: _array(getattr(system, name)) for name in outs}))
+
+        setattr(runtime, method, wrapper)
+
+
+def _check_recorded(host, selection, registry, contract, calls) -> Verdict:
+    method, evaluate = RECORDED[contract.name]
+    impl = registry.impl(selection.impl)
+    params = impl.resolve_params(selection.params)
+    calls = calls or [dict(seed=0), dict(seed=1), dict(seed=2)]
+    verdict = Verdict(contract.name, selection.impl, True)
+    if impl.reference is None:
+        verdict.failures.append("the implementation supplies no float64 reference")
+        verdict.ok = False
+        return verdict
+    worst: dict[str, float] = {}
+
+    with Session(host, [selection], registry) as session:
+        runtime = session.runtimes[contract.name]
+        recorder = _Recorder(runtime, method, contract)
+        for kwargs in calls:
+            recorder.calls.clear()
+            run = host.drive(contract.name, **kwargs)
+            first = list(recorder.calls)
+            recorder.calls.clear()
+            host.drive(contract.name, **kwargs)
+            second = list(recorder.calls)
+            if not first:
+                verdict.failures.append(f"the runtime was never called ({kwargs})")
+                continue
+            if len(first) != len(second):
+                verdict.failures.append(f"{len(first)} calls the first time, {len(second)} the second ({kwargs})")
+            for index, call in enumerate(first):
+                for name, value in call["inputs"].items():
+                    if not np.array_equal(value, call["after"][name], equal_nan=True):
+                        verdict.failures.append(f"input {name!r} was modified ({kwargs})")
+                for name, value in call["outputs"].items():
+                    if not np.all(np.isfinite(value)):
+                        verdict.failures.append(f"output {name!r} is not finite ({kwargs})")
+                    if index < len(second) and not np.array_equal(value, second[index]["outputs"][name], equal_nan=True):
+                        verdict.failures.append(f"output {name!r} differs between identical calls ({kwargs})")
+                reference = impl.reference({k: np.asarray(v, np.float64) if v.dtype.kind == "f" else v
+                                            for k, v in call["inputs"].items()}, params)
+                is_last = index == len(first) - 1
+                for name, value in evaluate(call, reference, run.get("effect") if is_last else None).items():
+                    worst[name] = max(worst.get(name, 0.0), value)
+    verdict.metrics = worst
+    for gate in contract.tolerances:
+        value = worst.get(gate.metric)
+        if value is None:
+            if gate.metric != "calls":
+                verdict.failures.append(f"{gate.metric} was not measured")
+        elif not value <= gate.max:
             verdict.failures.append(f"{gate.metric} = {value} exceeds {gate.max}")
     verdict.ok = not verdict.failures
     return verdict

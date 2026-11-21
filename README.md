@@ -8,7 +8,8 @@ the contract types, one guarded and scoped install rule, a session that applies 
 implementations to a host, a registry that describes itself as JSON, and a contract check that
 judges an implementation against a float64 reference.
 
-Today: the `newton.linear_solve` stage, MuJoCo Warp and MJLab adapters, and a simulator-free fake host.
+Today: four stages (an exact solver swap, a passive force law, a controller and a probe; see
+[docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, and a simulator-free fake host.
 The core imports only the standard library. See [docs/SPEC.md](docs/SPEC.md).
 
 ```python

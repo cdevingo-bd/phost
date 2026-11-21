@@ -62,6 +62,7 @@ class StageBinding:
 class Host(abc.ABC):
     info: HostInfo
     capabilities: Capability
+    backend: str = "numpy"        # array type the stages' ports carry: "numpy" or "warp"
 
     @abc.abstractmethod
     def facts(self) -> ModelFacts: ...

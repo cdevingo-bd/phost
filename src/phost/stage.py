@@ -23,6 +23,7 @@ class SwapClass(str, enum.Enum):
     EXACT = "exact"                    # same math, different algorithm; judged against a reference
     APPROXIMATE = "approximate"        # same math, bounded error; judged on a speed/error front
     MODEL_CHANGING = "model_changing"  # different physics; judged against ground truth, not the host
+    OBSERVER = "observer"              # reads state, changes nothing; judged on correctness and overhead
 
 
 class Role(str, enum.Enum):
@@ -101,7 +102,8 @@ class StageContract:
     metrics: tuple[MetricSpec, ...] = ()
     tolerances: tuple[Tolerance, ...] = ()
     extensions: tuple[Extension, ...] = ()
-    reference: str | None = None    # name of a registered float64 reference
+    reference: str | None = None    # "impl": every implementation supplies its own float64 reference;
+                                    # otherwise the name of a float64 reference that ships with the stage
 
     def __post_init__(self):
         names = [p.name for p in self.ports]

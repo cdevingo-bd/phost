@@ -74,6 +74,9 @@ class Impl:
     applicable: Callable[[ModelFacts], str | None] | None = None   # returns a reason if NOT applicable
     advisory: Callable[[ModelFacts], str | None] | None = None     # returns a warning; the impl still runs
     factory: Callable[[Host, Mapping[str, Any]], StageRuntime] | None = None
+    # float64 reference of this implementation's own math: (inputs by port name, resolved params) -> outputs by
+    # port name, as numpy arrays. Required when the stage's contract says ``reference="impl"``.
+    reference: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None
     provenance: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -109,4 +112,4 @@ class Impl:
             params=[dict(name=p.name, type=p.type, default=p.default, doc=p.doc, min=p.min, max=p.max,
                          choices=list(p.choices)) for p in self.params],
             metrics=[vars(m).copy() for m in self.metrics], extensions_used=list(self.extensions_used),
-            provenance=dict(self.provenance))
+            has_reference=self.reference is not None, provenance=dict(self.provenance))

@@ -15,7 +15,9 @@ means swapping an implementation.
 | Implementations (metadata, params, applicability, advisories) and registry (describes itself as JSON) | `impl.py`, `registry.py` | stdlib |
 | Session: apply a selection to a host for a scope, read metrics | `session.py` | stdlib |
 | Contract `newton.linear_solve`, its float64 reference and evaluator | `stages/newton_linear.py` | numpy for reference |
-| MuJoCo Warp and MJLab adapters | `hosts/mjwarp.py` | warp, mujoco_warp |
+| Contracts `dof.passive_force`, `control.law`, `probe.state` (see [CATALOG.md](CATALOG.md)) | `stages/` | numpy for evaluation |
+| Built-in implementations of those three, numpy and Warp backends, each with its float64 reference | `impls/` | numpy, warp |
+| MuJoCo Warp and MJLab adapters (what each stage relies on: [MJWARP_STEP.md](MJWARP_STEP.md)) | `hosts/mjwarp.py` | warp, mujoco_warp |
 | Simulator-free fake host, faulty runtimes, `check_impl` | `testing/` | numpy |
 
 The core imports only the standard library. Adapters import their simulator lazily. Arrays are
@@ -27,9 +29,13 @@ Every contract declares what kind of replacement it accepts, because scoring dep
 
 * `exact`: same math, different algorithm. Judged against a float64 reference with a tolerance.
 * `approximate`: same math, bounded error. Judged on a speed/error front.
-* `model_changing`: different physics. Judged against ground truth, not against the host.
+* `model_changing`: different physics. Judged against ground truth, not against the host. The contract says
+  `reference="impl"`: each implementation supplies its own float64 law (`Impl.reference`), and the registry
+  refuses one that does not.
+* `observer`: reads state and writes only its own buffer. Judged on matching its own definition and on cost.
 
-`newton.linear_solve` is `exact`.
+`newton.linear_solve` is `exact`; `dof.passive_force` and `control.law` are `model_changing`; `probe.state` is
+`observer`.
 
 ## Install rule (one for every stage)
 
@@ -66,26 +72,25 @@ warmup and capture, not replay. Keep the host and session alive while replaying 
 ## Reviewed hosts
 
 Only one build is reviewed: MuJoCo Warp 3.17.0 source build (f34c6dd5 plus local patches), for both
-the hook and the Hessian assembly. Any other build is refused with its hash in the message. Supporting
-another build means reviewing the hook and the assembly on it first, then adding the hash.
+the Newton hook, the Hessian assembly, and the three functions the pointwise stages wrap
+(`passive.passive`, `forward.fwd_actuation`, `forward.forward`). Any other build is refused with its hash in the
+message (mujoco_warp 4.0.1 is refused today). Supporting another build means reviewing those functions on it
+first, then adding the hashes.
 The MJLab adapter wraps `sim.wp_model`, `sim.wp_data`, `sim.mj_model`; it has been tested against a
 stand-in object, not against a real MJLab.
 
 ## Not built yet
 
-* The graph spec (a serializable description of which implementation sits on which stage), a scene
-  registry, a runner that executes a graph on a scene in an isolated process and writes JSON, and
-  metric plugins. See the roadmap below.
-* More stages. Only `newton.linear_solve` has a contract. A stage catalog needs an audit of the
-  host's whole step.
+* More stages. Four contracts exist; the audit in [MJWARP_STEP.md](MJWARP_STEP.md) lists what else the step
+  offers and why it is not built (mass-matrix solve, line search, constraint softness, collision, integrators).
+  The graph spec, scene registry, isolated runner and CLI live in the sibling package `phost-lab`.
 * Authoring: an expression DSL for pointwise stages, and kernel authoring with a sandbox.
 * A scoring and leaderboard layer, an event stream, and a UI. These are internal products and live in
   a private repository, not here.
 
 ## Roadmap
 
-1. **Headless lab:** graph spec, scene registry, runner, metric plugins, CLI. Exit: one command takes a
-   graph file and a scene and writes a JSON result that reproduces the A/B numbers.
-2. **Stage catalog:** audit the host step and define contracts, each with a reference and a swap class.
+1. **Headless lab:** done, in `phost-lab`.
+2. **Stage catalog:** done for four stages (see [CATALOG.md](CATALOG.md)).
 3. **Authoring:** expression DSL for one pointwise stage; kernel authoring for the linear solve, both
    in a sandbox.

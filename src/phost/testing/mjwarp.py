@@ -10,8 +10,12 @@ import copy
 
 import numpy as np
 
-from ..hosts.mjwarp import MJWarpHost, _solver_module
+from ..hosts.mjwarp import MJWarpHost, _forward_module, _passive_module, _solver_module
+from ..patch import original_of
+from ..stages import control_law as cl
+from ..stages import dof_passive_force as pf
 from ..stages import newton_linear as nl
+from ..stages import probe_state as ps
 
 SENTINEL = 123.0
 
@@ -40,6 +44,7 @@ class DrivableMJWarpHost(MJWarpHost):
     def __init__(self, model, data, *, cpu_model=None, cpu_data=None, name="mjwarp"):
         super().__init__(model, data, cpu_model=cpu_model, name=name)
         self.cpu_data = cpu_data
+        self._base_qpos = data.qpos.numpy().copy()            # the state every seeded drive perturbs
 
     def drive(self, stage: str, *, mode="synthetic", index=0, **kwargs):
         """Run one hook call and return its inputs and outputs.
@@ -50,11 +55,59 @@ class DrivableMJWarpHost(MJWarpHost):
         host assembled. Needed for implementations that use the structure hint, which derives from the
         host's constraint Jacobian and mass matrix.
         """
+        if stage in (pf.NAME, cl.NAME, ps.NAME):
+            return self._drive_forward(stage, **kwargs)
         if stage != nl.NAME:
-            raise ValueError(f"only {nl.NAME} can be driven")
+            raise ValueError(f"cannot drive {stage}")
         if mode == "step":
             return self._drive_step(index)
         return self._drive_synthetic(**kwargs)
+
+    def _drive_forward(self, stage, *, seed=0, owned=True):
+        """One forward-dynamics pass from a random state. The runtime's calls are recorded by ``check_impl``.
+
+        Returns the host-side effect the stage's contract promises: for ``dof.passive_force`` the change of
+        ``qfrc_passive`` against the host's own passive force; for ``control.law`` the actuator force MuJoCo
+        (C, float64) computes for the ctrl that was used. ``owned=False`` runs a copy of the model, which the
+        stage must leave alone.
+        """
+        import copy
+        import mujoco
+        import warp as wp
+        m, d = self.model, self.data
+        n, nv, nu = int(d.nworld), int(m.nv), int(m.nu)
+        rng = np.random.default_rng(seed)
+        scalar, address = self._scalar_dofs()
+        qpos = self._base_qpos.copy()
+        for dof in np.nonzero(scalar)[0]:
+            qpos[:, address[dof]] += 0.1 * rng.standard_normal(n)
+        with wp.ScopedDevice(self.device):
+            d.qpos.assign(qpos)
+            d.qvel.assign((0.3 * rng.standard_normal((n, nv))).astype(np.float32))
+            if nu:
+                d.ctrl.assign(rng.uniform(-0.5, 0.5, (n, nu)).astype(np.float32))
+            d.time.assign(rng.uniform(0, 5, n).astype(np.float32))
+            target = m if owned else copy.copy(m)
+            _forward_module().forward(target, d)
+            wp.synchronize()
+            effect = None
+            if stage == pf.NAME:
+                actual = d.qfrc_passive.numpy().astype(np.float64)
+                original_of(_passive_module().passive)(m, d)           # the host's own passive force, same state
+                wp.synchronize()
+                effect = dict(delta=actual - d.qfrc_passive.numpy().astype(np.float64))
+            elif stage == cl.NAME and nu:
+                if self.cpu_model is None:
+                    raise ValueError("driving control.law needs cpu_model for the float64 actuator-force reference")
+                cpu = mujoco.MjData(self.cpu_model)
+                expected = np.zeros((n, nu))
+                q, v, c, t = d.qpos.numpy(), d.qvel.numpy(), d.ctrl.numpy(), d.time.numpy()
+                for w in range(n):
+                    cpu.qpos[:], cpu.qvel[:], cpu.ctrl[:], cpu.time = q[w], v[w], c[w], t[w]
+                    mujoco.mj_forward(self.cpu_model, cpu)
+                    expected[w] = cpu.actuator_force
+                effect = dict(actuator_force=d.actuator_force.numpy(), expected_actuator_force=expected)
+        return dict(effect=effect, nv=nv)
 
     def _drive_step(self, index):
         import warp as wp

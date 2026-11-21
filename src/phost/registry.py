@@ -41,6 +41,9 @@ class Registry:
         clash = known & {m.name for m in impl.metrics}
         if clash:
             raise ContractError(f"impl {impl.id!r} redefines contract metrics {sorted(clash)}")
+        if contract.reference == "impl" and impl.reference is None and impl.kind.value != "native":
+            raise ContractError(f"impl {impl.id!r}: stage {contract.name!r} requires every implementation to supply a "
+                                "float64 reference")
         self._impls[impl.id] = impl
         return impl
 
