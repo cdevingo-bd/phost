@@ -37,6 +37,7 @@ class Session:
         if len(set(seen)) != len(seen):
             raise ContractError(f"stage selected twice: {sorted(x for x in seen if seen.count(x) > 1)}")
         self.runtimes: dict[str, Any] = {}
+        self.advisories: list[str] = []
         self._stack: ExitStack | None = None
 
     def __enter__(self) -> "Session":
@@ -49,6 +50,9 @@ class Session:
                     raise ContractError(f"impl {impl.id!r} is for stage {impl.stage!r}, not {selection.stage!r}")
                 params = impl.resolve_params(selection.params)
                 impl.check_applicable(facts)
+                note = impl.advise(facts)
+                if note:
+                    self.advisories.append(f"{impl.id}: {note}")
                 if impl.kind is ImplKind.NATIVE:
                     continue
                 if Capability.PATCH not in self.host.capabilities:

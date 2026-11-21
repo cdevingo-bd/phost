@@ -171,3 +171,12 @@ def test_reference_agrees_with_evaluate(host):
     ref = nl.reference(run["inputs"], run["nv"])
     got = run["outputs"]["search"]
     assert np.allclose(got[run["active"]], ref["search"][run["active"]], rtol=1e-4, atol=1e-5)
+
+
+def test_advisory_is_reported_but_does_not_block(host, registry):
+    registry.add_impl(Impl(id="test/advised", stage=nl.NAME, stage_version=1, version="1", title="t",
+                           kind=ImplKind.BUILTIN, advisory=lambda f: f"gains need nv >= 300, got {f.nv}",
+                           factory=lambda h, p: ReferenceRuntime(h, p)))
+    with Session(host, [Selection(nl.NAME, "test/advised")], registry) as session:
+        assert session.advisories == ["test/advised: gains need nv >= 300, got 12"]
+        host.drive(nl.NAME)

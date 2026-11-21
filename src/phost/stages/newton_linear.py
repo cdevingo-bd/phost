@@ -60,8 +60,10 @@ CONTRACT = StageContract(
     ),
     extensions=(
         Extension("structure_hint",
-                  "Callable hint(flags, refactor): sets flags[world, dof] = 1 for every DOF that may have an "
-                  "off-diagonal entry in H (a superset is allowed). Relies on how the host assembles H."),
+                  "Callable hint(flags, refactor): ORs 1 into flags[world, dof] for every DOF that may have an "
+                  "off-diagonal entry in H (a superset is allowed), for worlds with refactor[world] == 1. "
+                  "flags persist between calls: the implementation clears them only for worlds it rescans and "
+                  "the hint clears them when the host starts a new solve. Relies on how the host assembles H."),
         Extension("fallback",
                   "Callable fallback(solve_mask): runs the host's own solve for every world with solve_mask[world] == 1 "
                   "that is also active, and writes that world's outputs. Inactive worlds are ignored."),

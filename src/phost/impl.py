@@ -72,6 +72,7 @@ class Impl:
     metrics: tuple[MetricSpec, ...] = ()            # metrics beyond the stage contract's own
     extensions_used: tuple[str, ...] = ()           # optional host callables it relies on
     applicable: Callable[[ModelFacts], str | None] | None = None   # returns a reason if NOT applicable
+    advisory: Callable[[ModelFacts], str | None] | None = None     # returns a warning; the impl still runs
     factory: Callable[[Host, Mapping[str, Any]], StageRuntime] | None = None
     provenance: Mapping[str, str] = field(default_factory=dict)
 
@@ -96,6 +97,9 @@ class Impl:
         reason = self.applicable(facts) if self.applicable else None
         if reason:
             raise ApplicabilityError(f"impl {self.id!r} does not apply: {reason}")
+
+    def advise(self, facts: ModelFacts) -> str | None:
+        return self.advisory(facts) if self.advisory else None
 
     def describe(self) -> dict:
         """JSON-able description for tools (no callables)."""
