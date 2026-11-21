@@ -84,7 +84,8 @@ stand-in object, not against a real MJLab.
 * More stages. Four contracts exist; the audit in [MJWARP_STEP.md](MJWARP_STEP.md) lists what else the step
   offers and why it is not built (mass-matrix solve, line search, constraint softness, collision, integrators).
   The graph spec, scene registry, isolated runner and CLI live in the sibling package `phost-lab`.
-* Authoring: an expression DSL for pointwise stages, and kernel authoring with a sandbox.
+* Authoring lives in the sibling package `phost-author`: typed equations for the two law stages, and a sandbox
+  for user-written runtimes. Its README states what the sandbox does not protect.
 * A scoring and leaderboard layer, an event stream, and a UI. These are internal products and live in
   a private repository, not here.
 
@@ -92,5 +93,4 @@ stand-in object, not against a real MJLab.
 
 1. **Headless lab:** done, in `phost-lab`.
 2. **Stage catalog:** done for four stages (see [CATALOG.md](CATALOG.md)).
-3. **Authoring:** expression DSL for one pointwise stage; kernel authoring for the linear solve, both
-   in a sandbox.
+3. **Authoring:** done, in `phost-author` (typed equations; sandboxed kernel submissions).
