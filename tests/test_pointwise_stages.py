@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from phost import ApplicabilityError, ContractError, Impl, ImplKind, Registry, Selection, Session, SwapClass
+from phost import (ApplicabilityError, ContractError, Impl, ImplKind, ParamSpec, Registry, Selection, Session,
+                   SwapClass)
 from phost.impls import controllers, forces, probes, register_builtin
 from phost.stages import control_law as cl
 from phost.stages import dof_passive_force as pf
@@ -213,3 +214,17 @@ def test_probe_that_writes_a_state_array_is_caught(host, registry):
     selection = add(registry, ps, "meddler", Meddler, lambda inputs, params: dict(value=inputs["qvel"].sum(axis=1, keepdims=True)))
     verdict = check_impl(host, selection, registry)
     assert not verdict.ok and any("modified" in f for f in verdict.failures)
+
+
+def test_check_params_can_refuse_a_parameter_set(registry):
+    def check(params):
+        if params["k"] > 10:
+            raise ContractError("k is too stiff for this law")
+
+    registry.add_impl(Impl(id="test/checked", stage=pf.NAME, stage_version=1, version="1", title="c", kind=ImplKind.BUILTIN,
+                           params=(ParamSpec("k", "float", 1.0),),
+                           factory=lambda host, params: object(), reference=spring_reference, check_params=check))
+    impl = registry.impl("test/checked")
+    assert impl.resolve_params({"k": 5.0}) == {"k": 5.0}
+    with pytest.raises(ContractError, match="too stiff"):
+        impl.resolve_params({"k": 50.0})

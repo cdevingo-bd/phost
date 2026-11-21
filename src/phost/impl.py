@@ -77,6 +77,8 @@ class Impl:
     # float64 reference of this implementation's own math: (inputs by port name, resolved params) -> outputs by
     # port name, as numpy arrays. Required when the stage's contract says ``reference="impl"``.
     reference: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None
+    # Extra check on the resolved parameters (for example "this expression parses"). Raise ContractError to refuse.
+    check_params: Callable[[Mapping[str, Any]], None] | None = None
     provenance: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -94,7 +96,10 @@ class Impl:
         unknown = set(given) - set(known)
         if unknown:
             raise ContractError(f"impl {self.id!r}: unknown params {sorted(unknown)}; known {sorted(known)}")
-        return {name: spec.coerce(given[name] if name in given else spec.default) for name, spec in known.items()}
+        resolved = {name: spec.coerce(given[name] if name in given else spec.default) for name, spec in known.items()}
+        if self.check_params is not None:
+            self.check_params(resolved)
+        return resolved
 
     def check_applicable(self, facts: ModelFacts) -> None:
         reason = self.applicable(facts) if self.applicable else None
