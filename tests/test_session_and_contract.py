@@ -201,3 +201,19 @@ def test_writing_undefined_input_entries_is_allowed_but_defined_ones_are_not(hos
     assert check_impl(host, Selection(nl.NAME, "test/lowerwriter"), registry).ok
     verdict = check_impl(host, Selection(nl.NAME, "test/upperwriter"), registry)
     assert not verdict.ok and any("'h' was modified" in f for f in verdict.failures)
+
+
+def test_session_reset_metrics_calls_runtimes_that_support_it(host, registry):
+    class Counting(ReferenceRuntime):
+        resets = 0
+
+        def reset_metrics(self):
+            Counting.resets += 1
+
+    registry.add_impl(Impl(id="test/counting", stage=nl.NAME, stage_version=1, version="1", title="t",
+                           kind=ImplKind.BUILTIN, factory=lambda h, p: Counting(h, p)))
+    with Session(host, [Selection(nl.NAME, "test/counting")], registry) as session:
+        session.reset_metrics()
+    assert Counting.resets == 1
+    with Session(host, [Selection(nl.NAME, "test/reference")], registry) as session:
+        session.reset_metrics()                 # a runtime without reset_metrics is fine

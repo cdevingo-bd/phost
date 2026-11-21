@@ -87,6 +87,13 @@ class Session:
             self._stack.close()
             self._stack = None
 
+    def reset_metrics(self) -> None:
+        """Zero the counters of every runtime that supports it (those without ``reset_metrics`` are left alone)."""
+        for runtime in self.runtimes.values():
+            reset = getattr(runtime, "reset_metrics", None)
+            if reset is not None:
+                reset()
+
     def metrics(self) -> dict[str, Mapping[str, Any]]:
         """Metrics of every installed runtime, by stage. Reading may synchronize the device."""
         return {stage: dict(runtime.metrics()) for stage, runtime in self.runtimes.items()}
