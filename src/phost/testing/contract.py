@@ -165,7 +165,7 @@ def _check_recorded(host, selection, registry, contract, calls) -> Verdict:
     for gate in contract.tolerances:
         value = worst.get(gate.metric)
         if value is None:
-            if gate.metric != "calls":
+            if gate.metric != "traces":
                 verdict.failures.append(f"{gate.metric} was not measured")
         elif not value <= gate.max:
             verdict.failures.append(f"{gate.metric} = {value} exceeds {gate.max}")

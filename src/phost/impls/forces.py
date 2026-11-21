@@ -31,7 +31,7 @@ class _Numpy:
         self.calls += 1
 
     def metrics(self):
-        return dict(calls=self.calls)
+        return dict(traces=self.calls)
 
 
 class _Warp(_Numpy):

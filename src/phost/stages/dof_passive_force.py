@@ -54,7 +54,7 @@ CONTRACT = StageContract(
                    "max |force - reference force| / max |reference force|, reference in float64 from the implementation"),
         MetricSpec("max_effect_error", "1", "lower", "gauge",
                    "relative error of the host's passive-force change against force (float64)"),
-        MetricSpec("calls", "count", "none", "counter", "times the law was evaluated"),
+        MetricSpec("traces", "count", "none", "counter", "times the runtime ran in Python: once per eager call, once per warmup or graph capture, not once per replay"),
     ),
     tolerances=(
         Tolerance("max_law_error", 1e-5, "float32 evaluation of a float64 law"),

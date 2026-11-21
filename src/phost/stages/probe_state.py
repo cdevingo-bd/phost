@@ -43,7 +43,7 @@ CONTRACT = StageContract(
     metrics=(
         MetricSpec("max_law_error", "1", "lower", "gauge",
                    "max |value - reference value| / max |reference value|, reference in float64 from the implementation"),
-        MetricSpec("calls", "count", "none", "counter", "times the probe ran"),
+        MetricSpec("traces", "count", "none", "counter", "times the runtime ran in Python: once per eager call, once per warmup or graph capture, not once per replay"),
     ),
     tolerances=(Tolerance("max_law_error", 1e-5, "float32 evaluation of a float64 definition"),),
     reference="impl",

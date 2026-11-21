@@ -100,7 +100,7 @@ def test_builtin_implementations_pass_the_contract_on_the_real_host(host, regist
 def test_other_models_are_left_alone(host, registry):
     with Session(host, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=9.0))], registry) as session:
         host.drive(pf.NAME, owned=False)
-        assert session.metrics()[pf.NAME]["calls"] == 0
+        assert session.metrics()[pf.NAME]["traces"] == 0
 
 
 def test_scope_restores_every_function(host, registry):
@@ -220,3 +220,19 @@ def test_captured_graph_replays_the_installed_stages():
     eager = run_gpu(40, selections, registry)
     replayed = run_gpu(40, selections, registry, graph=True)
     assert np.abs(eager - replayed).max() < 1e-5
+
+
+def test_traces_count_python_runs_not_graph_replays():
+    """Under a captured graph the runtime runs in Python at warmup and capture only; ``traces`` says so."""
+    host, cm, cd = make_host(2)
+    registry = Registry(); register_all(registry); register_builtin(registry)
+    with wp.ScopedDevice("cuda:0"), Session(host, [Selection(ps.NAME, probes.PEAK_ID)], registry) as session:
+        mjw.step(host.model, host.data)                              # warmup: one run in Python
+        with wp.ScopedCapture() as cap:
+            mjw.step(host.model, host.data)                          # capture: one more
+        for _ in range(25):
+            wp.capture_launch(cap.graph)
+        wp.synchronize()
+        metrics = session.metrics()[ps.NAME]
+    assert metrics["traces"] == 2
+    assert metrics["last_max_qvel"] > 0                               # but the device buffer is live after replays

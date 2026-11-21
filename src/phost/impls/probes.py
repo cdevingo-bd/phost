@@ -35,7 +35,7 @@ class _Numpy:
 
     def metrics(self):
         import numpy as np
-        out: dict = dict(calls=self.calls)
+        out: dict = dict(traces=self.calls)
         if self._last is not None:
             last = self._last.numpy() if hasattr(self._last, "numpy") else np.asarray(self._last)
             out["last_max_qvel"], out["last_max_qacc"] = float(last[:, 0].max()), float(last[:, 1].max())
