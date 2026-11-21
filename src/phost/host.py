@@ -23,7 +23,7 @@ class HostInfo:
     name: str                  # "mjwarp" | "mjlab" | "fake" | ...
     version: str
     build_id: str | None = None   # source revision for source builds
-    patched: bool = False         # the build carries local changes
+    patched: bool | None = None  # the build carries local changes; None when unknown
 
 
 @dataclass(frozen=True)
