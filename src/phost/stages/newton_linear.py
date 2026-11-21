@@ -42,7 +42,7 @@ CONTRACT = StageContract(
         "For every active world, H_sym * (-search) = grad to the tolerance below, where H_sym is rebuilt from the upper triangle.",
         "search_dot equals the squared 2-norm of search and newton_decrement equals -grad . search.",
         "Outputs of inactive worlds are not written.",
-        "No input is modified.",
+        "No defined input entry is modified. Undefined entries (the lower triangle of h, anything beyond the leading nv entries) may hold any value, including NaN, and may be overwritten.",
         "Worlds are independent: a world's outputs do not depend on any other world's inputs.",
     ),
     metrics=(

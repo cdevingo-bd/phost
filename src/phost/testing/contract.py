@@ -27,6 +27,15 @@ class Verdict:
         return self.ok
 
 
+def _defined(name, array, nv):
+    """The entries of an input the contract defines: upper triangle of h's leading block, first nv of grad."""
+    array = np.asarray(array)
+    if name == "h":
+        rows, cols = np.triu_indices(nv)
+        return array[:, rows, cols]
+    return array[:, :nv]
+
+
 def check_impl(host, selection: Selection, registry: Registry | None = None, *, calls=None) -> Verdict:
     """Install ``selection`` on ``host``, drive calls, and check every contract rule.
 
@@ -43,7 +52,8 @@ def check_impl(host, selection: Selection, registry: Registry | None = None, *, 
         for kwargs in calls:
             run = host.drive(contract.name, **kwargs)
             for name in ("h", "grad"):
-                if not np.array_equal(run["unchanged"][name], run["after"][name]):
+                if not np.array_equal(_defined(name, run["unchanged"][name], run["nv"]),
+                                      _defined(name, run["after"][name], run["nv"]), equal_nan=True):
                     verdict.failures.append(f"input {name!r} was modified ({kwargs})")
             out = run["outputs"]
             for w in range(run["active"].shape[0]):

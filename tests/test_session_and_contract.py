@@ -180,3 +180,24 @@ def test_advisory_is_reported_but_does_not_block(host, registry):
     with Session(host, [Selection(nl.NAME, "test/advised")], registry) as session:
         assert session.advisories == ["test/advised: gains need nv >= 300, got 12"]
         host.drive(nl.NAME)
+
+
+def test_writing_undefined_input_entries_is_allowed_but_defined_ones_are_not(host, registry):
+    from phost.testing.runtimes import ReferenceRuntime
+
+    class LowerWriter(ReferenceRuntime):
+        def solve(self, s):
+            super().solve(s)
+            s.h[:, 5, 2] = np.nan                      # strictly lower: undefined by the contract
+
+    class UpperWriter(ReferenceRuntime):
+        def solve(self, s):
+            super().solve(s)
+            s.h[:, 2, 5] += 1.0                        # upper: defined, must not change
+
+    for name, cls in (("lowerwriter", LowerWriter), ("upperwriter", UpperWriter)):
+        registry.add_impl(Impl(id=f"test/{name}", stage=nl.NAME, stage_version=1, version="1", title=name,
+                               kind=ImplKind.BUILTIN, factory=lambda h, p, cls=cls: cls(h, p)))
+    assert check_impl(host, Selection(nl.NAME, "test/lowerwriter"), registry).ok
+    verdict = check_impl(host, Selection(nl.NAME, "test/upperwriter"), registry)
+    assert not verdict.ok and any("'h' was modified" in f for f in verdict.failures)
