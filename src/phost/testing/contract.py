@@ -15,6 +15,7 @@ from ..judge import Judge, context
 from ..registry import Registry, default
 from ..session import Selection, Session
 from ..stage import Role, StageContract
+from ..stages._common import relative_error
 
 SENTINEL = 123.0                  # what a driver fills an output with before the call, to see which worlds were written
 
@@ -45,7 +46,8 @@ def check_impl(host, selection: Selection, registry: Registry | None = None, *, 
     calls = calls or judge.default_calls(host)
     check = _check_driven if judge.driven else _check_recorded
     verdict = check(host, selection, registry, contract, judge, calls)
-    for gate in contract.tolerances:
+    impl = registry.impl(selection.impl)
+    for gate in impl.gates(contract.tolerances, impl.resolve_params(selection.params)):
         value = verdict.metrics.get(gate.metric)
         if value is None:
             verdict.failures.append(f"{gate.metric} was not measured")
@@ -84,6 +86,29 @@ class _Recorder:
         setattr(runtime, method, wrapper)
 
 
+def _program_error(impl, params, inputs, outputs, ports, judge, run, active=None):
+    """How far the outputs are from the implementation's own float64 reference, or None when it has none.
+
+    For a stage whose contract does not ask for a reference (a solve is judged by its residual), an implementation that
+    supplies one gets this extra measure: the residual says whether the method converged, this says whether the code that was
+    generated computes the method that was typed.
+    """
+    if impl.reference is None:
+        return None
+    own = impl.run_reference({k: np.asarray(v, np.float64) if np.asarray(v).dtype.kind == "f" else v for k, v in inputs.items()},
+                             params, dims=dict(nv=run.get("nv")))
+    worst = 0.0
+    for name, got in outputs.items():
+        if name not in own:
+            continue
+        got, want = np.asarray(got), np.asarray(own[name])
+        if active is not None:
+            keep = np.asarray(active).astype(bool)
+            got, want = got[keep], want[keep]
+        worst = max(worst, relative_error(judge.entries(ports[name], got, run), judge.entries(ports[name], want, run)))
+    return worst
+
+
 def _worst(into: dict, metrics) -> None:
     for name, value in metrics.items():
         into[name] = max(into.get(name, 0.0), value)
@@ -95,6 +120,8 @@ def _check_driven(host, selection, registry, contract, judge: Judge, calls) -> V
     ports = {p.name: p for p in contract.ports}
     verdict = Verdict(contract.name, selection.impl, True)
     worst: dict[str, float] = {}
+    impl = registry.impl(selection.impl)
+    params = impl.resolve_params(selection.params)
     with Session(host, [selection], registry):
         for kwargs in calls:
             run = host.drive(contract.name, **kwargs)
@@ -112,6 +139,9 @@ def _check_driven(host, selection, registry, contract, judge: Judge, calls) -> V
                     elif not np.all(value == SENTINEL):
                         verdict.failures.append(f"output {name!r} written for inactive world {w} ({kwargs})")
             _worst(worst, judge.evaluate(dict(inputs=run["inputs"], outputs=out), None, None, context(run)))
+            error = _program_error(impl, params, run["inputs"], out, ports, judge, run, run["active"])
+            if error is not None:
+                _worst(worst, dict(max_program_error=error))
     verdict.metrics = worst
     return verdict
 
@@ -150,7 +180,7 @@ def _check_recorded(host, selection, registry, contract, judge: Judge, calls) ->
                 verdict.failures.append(f"{len(first)} calls the first time, {len(second)} the second ({kwargs})")
             ctx = context(run)
             if contract.reference == "impl":
-                ctx.law = lambda inputs: impl.reference(floats(inputs), params)
+                ctx.law = lambda inputs: impl.run_reference(floats(inputs), params, dims=dict(nv=run.get('nv')))
             elif judge.reference is not None:
                 ctx.law = lambda inputs: judge.reference(floats(inputs), ctx)
             for index, call in enumerate(first):
@@ -168,5 +198,9 @@ def _check_recorded(host, selection, registry, contract, judge: Judge, calls) ->
                 reference = ctx.law(call["inputs"]) if ctx.law is not None else None
                 effect = run.get("effect") if index == len(first) - 1 else None
                 _worst(worst, judge.evaluate(call, reference, effect, ctx))
+                if contract.reference != "impl":
+                    error = _program_error(impl, params, call["inputs"], call["outputs"], ports, judge, run)
+                    if error is not None:
+                        _worst(worst, dict(max_program_error=error))
     verdict.metrics = worst
     return verdict

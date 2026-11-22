@@ -7,7 +7,7 @@ from typing import Iterable
 from .errors import ContractError
 from .impl import Impl
 from .judge import Judge, StageSpec
-from .stage import StageContract
+from .stage import StageContract, SwapClass
 
 
 class Registry:
@@ -15,6 +15,7 @@ class Registry:
         self._contracts: dict[str, StageContract] = {}
         self._impls: dict[str, Impl] = {}
         self._judges: dict[str, Judge] = {}
+        self._equations: dict[str, object] = {}
 
     def add_stage(self, spec: StageSpec) -> StageSpec:
         """Register a stage: its contract and how it is judged. Adding the same stage again changes nothing."""
@@ -22,8 +23,22 @@ class Registry:
         old = self._judges.get(spec.contract.key)
         if old is not None and old != spec.judge:
             raise ContractError(f"stage {spec.contract.key} already registered with a different judge")
+        old_form = self._equations.get(spec.contract.key)
+        if old_form is not None and old_form != spec.equation:
+            raise ContractError(f"stage {spec.contract.key} already registered with a different equation form")
         self._judges[spec.contract.key] = spec.judge
+        if spec.equation is not None:
+            self._equations[spec.contract.key] = spec.equation
         return spec
+
+    def equation(self, name: str, version: int | None = None):
+        """The form a typed law for this stage takes (``phost.equation``), or None when the stage takes none."""
+        return self._equations.get(self.contract(name, version).key)
+
+    def equation_stages(self) -> list[str]:
+        """Names of the stages that take a typed law, in registration order (the latest version of each)."""
+        return [c.name for c in self._contracts.values() if c.key in self._equations
+                and c.version == max(x.version for x in self._contracts.values() if x.name == c.name)]
 
     def judge(self, name: str, version: int | None = None) -> Judge:
         contract = self.contract(name, version)
@@ -60,6 +75,9 @@ class Registry:
         clash = known & {m.name for m in impl.metrics}
         if clash:
             raise ContractError(f"impl {impl.id!r} redefines contract metrics {sorted(clash)}")
+        if impl.swap_class is not None and contract.swap_class not in (SwapClass.EXACT, SwapClass.APPROXIMATE):
+            raise ContractError(f"impl {impl.id!r}: stage {contract.name!r} is {contract.swap_class.value}, which an "
+                                "implementation cannot relax")
         if contract.reference == "impl" and impl.reference is None and impl.kind.value != "native":
             raise ContractError(f"impl {impl.id!r}: stage {contract.name!r} requires every implementation to supply a "
                                 "float64 reference")
@@ -79,7 +97,8 @@ class Registry:
         return list(self._contracts.values())
 
     def describe(self) -> dict:
-        return dict(contracts=[c.to_dict() for c in self._contracts.values()],
+        return dict(contracts=[dict(c.to_dict(), equation=self._equations[c.key].to_dict() if c.key in self._equations else None)
+                               for c in self._contracts.values()],
                     impls=[i.describe() for i in self._impls.values()])
 
 

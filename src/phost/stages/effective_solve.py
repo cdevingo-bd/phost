@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from ..impl import Impl, ImplKind
+from ..equation import Iteration
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
@@ -153,4 +154,6 @@ def _judge_evaluate(call, reference, effect, ctx) -> dict:
     return out
 
 
-SPEC = StageSpec(CONTRACT, Judge(evaluate=_judge_evaluate, defined=padded_entries))
+EQUATION = Iteration(matrix="h", rhs="rhs", solution="qacc", dim="nv")
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=_judge_evaluate, defined=padded_entries), equation=EQUATION)

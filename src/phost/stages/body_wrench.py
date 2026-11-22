@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..equation import Name, Pointwise
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
@@ -85,4 +86,14 @@ def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapp
     return out
 
 
-SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))
+EQUATION = Pointwise(
+    element="body",
+    inputs=(Name("x", "xpos", 0, "position of the body frame, world x"), Name("y", "xpos", 1), Name("z", "xpos", 2),
+            Name("wx", "cvel", 0, "angular velocity about the centre of mass, world x"), Name("wy", "cvel", 1),
+            Name("wz", "cvel", 2), Name("vx", "cvel", 3, "linear velocity of the centre of mass, world x"),
+            Name("vy", "cvel", 4), Name("vz", "cvel", 5), Name("time", "time")),
+    outputs=(Name("fx", "wrench", 0, "force, world x"), Name("fy", "wrench", 1), Name("fz", "wrench", 2),
+             Name("tx", "wrench", 3, "torque about the centre of mass, world x"), Name("ty", "wrench", 4),
+             Name("tz", "wrench", 5)))
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True), equation=EQUATION)

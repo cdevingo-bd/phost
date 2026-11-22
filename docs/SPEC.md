@@ -11,6 +11,7 @@ means swapping an implementation.
 | Piece | Where | Needs |
 | --- | --- | --- |
 | Stage contract (machine-readable: ports, layouts, invariants, swap class, tolerances, metrics, reference) | `stage.py` | stdlib |
+| How a stage's law can be typed (`Pointwise`, `Channels`, `Iteration`), as data checked against the contract | `equation.py` | stdlib |
 | Source guards and one scoped install rule | `guard.py`, `patch.py` | stdlib |
 | Implementations (metadata, params, applicability, advisories) and registry (describes itself as JSON) | `impl.py`, `registry.py` | stdlib |
 | Session: apply a selection to a host for a scope, read metrics | `session.py` | stdlib |
@@ -36,8 +37,13 @@ Every contract declares what kind of replacement it accepts, because scoring dep
   refuses one that does not.
 * `observer`: reads state and writes only its own buffer. Judged on matching its own definition and on cost.
 
-`newton.linear_solve` and `effective.solve` are `exact`; `dof.passive_force` and `control.law` are `model_changing`; `probe.state` is
-`observer`.
+`newton.linear_solve` and `effective.solve` are `exact`; `dof.passive_force`, `control.law` and `body.wrench` are `model_changing`;
+`probe.state` is `observer`.
+
+A stage's class is the default for its implementations. An implementation of an `exact` stage may declare itself `approximate`
+(`Impl.swap_class`) with gates of its own (`Impl.tolerances(params)`, replacing the stage's for the metrics they name): a typed
+solver step claims a residual and is held to it, and is ranked as approximate. A `model_changing` or `observer` stage cannot be
+relaxed.
 
 ## Install rule (one for every stage)
 

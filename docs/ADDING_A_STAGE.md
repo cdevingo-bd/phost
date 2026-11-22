@@ -105,6 +105,36 @@ installing anything; `phost-lab sparsity --scene S` prints it with the work a st
 The pattern is static. The Newton solve's `structure_hint` is the per-call analogue (its pattern changes with the contacts),
 and its flags are `Sparsity.coupled_rows()` of that call's matrix.
 
+## Letting a person type the law
+
+A stage says how a law for it can be typed by attaching an `equation` form to its `StageSpec` (`phost.equation`). The form is
+data, checked against the contract when the spec is built, and it names no host, no array library and no code generator.
+
+```python
+EQUATION = Pointwise(element="body",
+    inputs=(Name("vx", "cvel", 3), ..., Name("time", "time")),     # a name is one entry of a port: (port, column)
+    outputs=(Name("fx", "wrench", 0), ..., Name("tz", "wrench", 5)))
+SPEC = StageSpec(CONTRACT, Judge(...), equation=EQUATION)
+```
+
+| Form | One law is | Shipped for |
+|---|---|---|
+| `Pointwise` | an expression per output, evaluated for every element (DOF, actuator, body) of every world; an optional `mask` port and an optional `Slope` (the law's derivative, reported on a port) | `dof.passive_force`, `control.law`, `body.wrench` |
+| `Channels` | one expression per column of a `(world, width)` port, over arrays, with `sum norm dot maxabs ...` and `name[3]` | `probe.state` |
+| `Iteration` | a program (`init`, then `step` repeated) that solves `matrix x = rhs` per world, with `A @ name`, `dot`, `rhs`, `diag` | `effective.solve`, `newton.linear_solve` |
+
+`phost-author` registers a `<stage>/expression` implementation for every stage in the registry that declares a form, so a new
+stage with a form is typeable (and appears in the dashboard's equation tab) with no change there. How the text becomes code is
+a backend's job (`phost_author.backends`: NumPy and Warp ship; a JAX or CUDA-C backend is one class and a `register_backend`
+call, chosen by the host's `backend` name). The float64 reference is the NumPy backend run on the same checked trees, so the
+contract check measures the generated code against exactly what was typed.
+
+A typed solver is *approximate*: an `Impl` may declare `swap_class=SwapClass.APPROXIMATE` on an exact stage, and then
+`Impl.tolerances(params)` replaces the stage's gates for the metrics it names, with the accuracy the program claims. The check
+enforces the claim, the lab ranks the run as approximate (speed and accuracy, not speed alone), and any implementation that
+supplies a float64 reference gets `max_program_error`: the generated code against what was typed, apart from whether what was
+typed is any good.
+
 ## What stays outside the recipe
 
 * A stage that needs a derived port no table source expresses (a reordering applied on the device, say) needs a new source or

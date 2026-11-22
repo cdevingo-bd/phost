@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..equation import Channels, Name
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
@@ -81,4 +82,11 @@ def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapp
     return dict(max_law_error=relative_error(call["outputs"]["value"], reference["value"]))
 
 
-SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))
+EQUATION = Channels(
+    inputs=(Name("qpos", "qpos", doc="generalized positions, one per coordinate"),
+            Name("qvel", "qvel", doc="generalized velocities, one per DOF"),
+            Name("qacc", "qacc", doc="the accelerations the host just solved for"),
+            Name("time", "time", doc="simulation time")),
+    output="value")
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True), equation=EQUATION)

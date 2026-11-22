@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from ..impl import Impl, ImplKind, ParamSpec
 from ..registry import Registry
 from ..stages import dof_passive_force as stage
+from ..stages.dof_passive_force import advisory as _advisory, applicable as _applicable
 
 SPRING_DAMPER_ID = f"{stage.NAME}/spring-damper"
 IMPLICIT = "implicit_damping"
@@ -50,23 +51,6 @@ class _Warp(_Numpy):
         else:
             wp.launch(_warp.spring_damper, dim=system.force.shape, inputs=arguments, outputs=[system.force],
                       device=system.force.device)
-
-
-def _advisory(facts):
-    if facts.integrator in ("implicit", "implicitfast"):
-        return ("the law is applied explicitly: the integrator's velocity Jacobian comes from the model's own damping, "
-                "so a stiff velocity-dependent law may need a smaller timestep")
-    return None
-
-
-def _applicable(facts):
-    if facts.integrator == "discrete":
-        return "the discrete integrator builds its own effective-force solve, which bypasses this stage"
-    if facts.sleep:
-        return "sleeping islands change the passive-force path"
-    if facts.extra.get("scalar_dofs", 0) == 0:
-        return "the model has no hinge or slide DOF"
-    return None
 
 
 def _factory(host, params):

@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..equation import Name, Pointwise, Slope
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
@@ -153,4 +154,25 @@ def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapp
     return out
 
 
-SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))
+def advisory(facts):
+    if facts.integrator in ("implicit", "implicitfast"):
+        return ("the law is applied explicitly: the integrator's velocity Jacobian comes from the model's own damping, "
+                "so a stiff velocity-dependent law may need a smaller timestep")
+    return None
+
+
+def applicable(facts):
+    if facts.integrator == "discrete":
+        return "the discrete integrator builds its own effective-force solve, which bypasses this stage"
+    if facts.sleep:
+        return "sleeping islands change the passive-force path"
+    if facts.extra.get("scalar_dofs", 0) == 0:
+        return "the model has no hinge or slide DOF"
+    return None
+
+
+EQUATION = Pointwise(
+    element="nv", inputs=(Name("q", "q"), Name("v", "v"), Name("time", "time")), outputs=(Name("force", "force"),),
+    mask="scalar", slope=Slope(of="v", port="damping", sign=-1.0), applicable=applicable, advisory=advisory)
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True), equation=EQUATION)

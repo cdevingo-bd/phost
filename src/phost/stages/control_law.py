@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..equation import Name, Pointwise
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
@@ -83,4 +84,27 @@ def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapp
     return out
 
 
-SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))
+def advisory(facts):
+    if facts.integrator in ("implicit", "implicitfast"):
+        return ("the law is not part of the implicit integrator's velocity Jacobian, so a stiff velocity-dependent law "
+                "may need a smaller timestep")
+    return None
+
+
+def applicable(facts):
+    if facts.integrator == "discrete":
+        return "the discrete integrator builds its own effective-force solve, which bypasses this stage"
+    if facts.sleep:
+        return "sleeping islands change the actuation path"
+    if facts.extra.get("nu", 0) == 0:
+        return "the model has no actuators"
+    if facts.extra.get("nhistory", 0) > 0:
+        return "the model delays ctrl through a history buffer, which this stage would bypass"
+    return None
+
+
+EQUATION = Pointwise(
+    element="nu", inputs=(Name("length", "length"), Name("velocity", "velocity"), Name("time", "time")),
+    outputs=(Name("ctrl", "ctrl"),), applicable=applicable, advisory=advisory)
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True), equation=EQUATION)

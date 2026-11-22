@@ -4,6 +4,7 @@ The core imports only the standard library. Hosts and arrays come from adapters 
 packages that implement stages.
 """
 
+from .equation import Channels, Iteration, Pointwise, Slope
 from .errors import ApplicabilityError, CapabilityError, ContractError, GuardError, PhostError
 from .guard import Guard, source_hash
 from .host import Capability, Host, HostInfo, ModelFacts, NativeTiming, Provision, StageBinding
@@ -21,5 +22,5 @@ __all__ = [
     "ApplicabilityError", "CapabilityError", "ContractError", "GuardError", "PhostError", "Guard", "source_hash",
     "Capability", "Host", "HostInfo", "ModelFacts", "NativeTiming", "Provision", "StageBinding", "Judge", "StageSpec", "Impl", "ImplKind", "ParamSpec", "StageRuntime",
     "PatchPoint", "Target", "install", "original_of", "Registry", "default", "Selection", "Session", "Extension", "MetricSpec",
-    "Port", "Role", "StageContract", "SwapClass", "Tolerance", "check_ports", "CALLS", "Meter", "PythonMeter",
+    "Channels", "Iteration", "Pointwise", "Slope", "Port", "Role", "StageContract", "SwapClass", "Tolerance", "check_ports", "CALLS", "Meter", "PythonMeter",
 ]

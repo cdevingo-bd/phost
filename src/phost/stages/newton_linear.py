@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
 from ..impl import Impl, ImplKind
+from ..equation import Iteration
 from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import (CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance)
@@ -163,7 +164,11 @@ def _judge_evaluate(call, reference, effect, ctx) -> dict:
     return evaluate(call["inputs"], call["outputs"], ctx.nv)
 
 
+EQUATION = Iteration(matrix="h", rhs="grad", solution="search", dim="nv", sign=-1.0, active="active",
+                     derived=(("search_dot", "square_norm"), ("newton_decrement", "rhs_dot")))
+
 # The driver observes the host's hook itself (the inputs are built per host call, with inactive worlds), hence ``driven``.
 SPEC = StageSpec(CONTRACT, Judge(
     evaluate=_judge_evaluate, defined=padded_entries, driven=True,
-    calls=lambda host: [{}, {"active": [1, 0] + [1] * (host.data.nworld - 2)}, {"skip_unchanged": True, "skip_noflip": True}]))
+    calls=lambda host: [{}, {"active": [1, 0] + [1] * (host.data.nworld - 2)}, {"skip_unchanged": True, "skip_noflip": True}]),
+    equation=EQUATION)

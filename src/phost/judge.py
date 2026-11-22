@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
+from .equation import Channels, Iteration, Pointwise, validate as validate_equation
 from .stage import Port, StageContract
 
 Call = Mapping[str, Any]          # one recorded runtime call: inputs (before), after (inputs again), outputs
@@ -67,11 +68,17 @@ def context(run: Mapping[str, Any], law=None) -> SimpleNamespace:
 
 @dataclass(frozen=True)
 class StageSpec:
-    """Everything that defines a stage, host-neutral: its contract and how it is judged."""
+    """Everything that defines a stage, host-neutral: its contract, how it is judged and, when a law for it can be typed, the
+    form the text takes (``equation``)."""
 
     contract: StageContract
     judge: Judge
     doc: str = field(default="", compare=False)
+    equation: "Pointwise | Channels | Iteration | None" = None   # how a law for this stage can be typed (phost.equation)
+
+    def __post_init__(self):
+        if self.equation is not None:
+            validate_equation(self.equation, self.contract)
 
     @property
     def name(self) -> str:

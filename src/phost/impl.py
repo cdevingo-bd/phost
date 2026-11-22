@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import enum
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
 
 from .errors import ApplicabilityError, ContractError
 from .host import Host, ModelFacts
-from .stage import MetricSpec
+from .stage import MetricSpec, SwapClass, Tolerance
 
 
 class ImplKind(str, enum.Enum):
@@ -80,6 +81,12 @@ class Impl:
     reference: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None
     # Extra check on the resolved parameters (for example "this expression parses"). Raise ContractError to refuse.
     check_params: Callable[[Mapping[str, Any]], None] | None = None
+    # An implementation may be less exact than its stage: an exact stage (a linear solve) can be answered by an approximate
+    # method (a few iterations). ``swap_class`` says so (only ``APPROXIMATE`` is accepted, and only for an exact or approximate
+    # stage), and ``tolerances(params)`` gives the gates it is held to in place of the stage's for the same metrics: the
+    # accuracy the method claims, which the check then enforces. The scorer ranks it on speed and accuracy, not speed alone.
+    swap_class: SwapClass | None = None
+    tolerances: Callable[[Mapping[str, Any]], tuple[Tolerance, ...]] | None = None
     provenance: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -90,6 +97,10 @@ class Impl:
         names = [p.name for p in self.params]
         if len(set(names)) != len(names):
             raise ContractError(f"impl {self.id!r}: duplicate params")
+        if self.swap_class not in (None, SwapClass.APPROXIMATE):
+            raise ContractError(f"impl {self.id!r}: an implementation can only declare itself approximate")
+        if self.tolerances is not None and self.swap_class is None:
+            raise ContractError(f"impl {self.id!r}: only an approximate implementation has gates of its own")
 
     def resolve_params(self, given: Mapping[str, Any] | None) -> dict[str, Any]:
         given = dict(given or {})
@@ -110,6 +121,21 @@ class Impl:
     def advise(self, facts: ModelFacts) -> str | None:
         return self.advisory(facts) if self.advisory else None
 
+    def run_reference(self, inputs: Mapping[str, Any], params: Mapping[str, Any], dims: Mapping[str, int] | None = None) -> Mapping[str, Any]:
+        """Run ``reference``. A reference that declares a ``dims`` parameter also gets the sizes of the stage's dimensions that its
+        inputs do not show (a padded system does not say how many unknowns it has)."""
+        if self.reference is None:
+            raise ContractError(f"impl {self.id!r} has no float64 reference")
+        if "dims" in inspect.signature(self.reference).parameters:
+            return self.reference(inputs, params, dims=dict(dims or {}))
+        return self.reference(inputs, params)
+
+    def gates(self, contract_tolerances: tuple[Tolerance, ...], params: Mapping[str, Any]) -> tuple[Tolerance, ...]:
+        """The gates this implementation is held to: the stage's, with this implementation's own in place of the same metrics."""
+        own = self.tolerances(params) if self.tolerances is not None else ()
+        replaced = {t.metric for t in own}
+        return (*[t for t in contract_tolerances if t.metric not in replaced], *own)
+
     def describe(self) -> dict:
         """JSON-able description for tools (no callables)."""
         return dict(
@@ -119,4 +145,5 @@ class Impl:
                          choices=list(p.choices)) for p in self.params],
             metrics=[vars(m).copy() for m in self.metrics], extensions_used=list(self.extensions_used),
             extensions_optional=list(self.extensions_optional),
-            has_reference=self.reference is not None, provenance=dict(self.provenance))
+            has_reference=self.reference is not None, swap_class=self.swap_class.value if self.swap_class else None,
+            provenance=dict(self.provenance))
