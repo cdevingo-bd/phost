@@ -16,7 +16,7 @@ The core imports only the standard library. See [docs/SPEC.md](docs/SPEC.md).
 import phost
 from phost.hosts.mjwarp import MJWarpHost
 from phost.stages import newton_linear
-import coupledchol.phost_impl as coupled
+import phost_coupledchol.phost_impl as coupled
 
 registry = phost.default
 newton_linear.register(registry); coupled.register(registry)
