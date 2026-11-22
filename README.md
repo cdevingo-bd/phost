@@ -52,7 +52,7 @@ with phost.Session(host, [phost.Selection("newton.linear_solve", coupled.SCAN)])
 
 ## The set
 
-phost is one of six packages. None is on PyPI yet, so install from a clone, `phost` first:
+phost is one of seven packages. None is on PyPI yet, so install from a clone, `phost` first:
 
 | package | what it is |
 | --- | --- |
@@ -62,6 +62,7 @@ phost is one of six packages. None is on PyPI yet, so install from a clone, `pho
 | [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations compiled to Warp kernels, and a sandbox for submitted kernels |
 | [phost-score](https://github.com/cdevingo-bd/phost-score) | gates by swap class, a Pareto board, a hash-chained ledger |
 | [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local browser view over the above; the GPU work stays in the lab's workers |
+| [phost-agent](https://github.com/cdevingo-bd/phost-agent) | what an agent is told, a funnel of cheap checks before a timed run, a memo, a device lease and budgets; it calls no model |
 
 ```
 git clone https://github.com/cdevingo-bd/phost && pip install -e phost     # repeat for the others, in the order above

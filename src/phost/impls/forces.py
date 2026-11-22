@@ -39,6 +39,19 @@ class _Numpy:
         return {}
 
 
+class _Jax(_Numpy):
+    """The same law over JAX arrays: read with ``unwrap``, write by assigning (the host's cell takes the new array)."""
+
+    def apply(self, system):
+        import jax.numpy as jnp
+        from ..ports import unwrap
+        p, on = self.p, unwrap(system.scalar).astype(bool)
+        law = -p["k"] * (unwrap(system.q) - p["q_ref"]) - p["c"] * unwrap(system.v)
+        system.force[...] = jnp.where(on, law, 0.0)
+        if system.damping is not None and p["implicit"]:
+            system.damping[...] = jnp.where(on, p["c"], 0.0)
+
+
 class _Warp(_Numpy):
     def apply(self, system):
         import warp as wp
@@ -54,7 +67,7 @@ class _Warp(_Numpy):
 
 
 def _factory(host, params):
-    return (_Warp if host.backend == "warp" else _Numpy)(params)
+    return {"warp": _Warp, "jax": _Jax}.get(host.backend, _Numpy)(params)
 
 
 def register(registry: Registry) -> None:

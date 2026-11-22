@@ -33,6 +33,13 @@ class _Numpy:
         return {}
 
 
+class _Jax(_Numpy):
+    def apply(self, system):
+        from ..ports import unwrap
+        p = self.p
+        system.ctrl[...] = p["kp"] * (p["target"] - unwrap(system.length)) - p["kd"] * unwrap(system.velocity)
+
+
 class _Warp(_Numpy):
     def apply(self, system):
         import warp as wp
@@ -43,7 +50,7 @@ class _Warp(_Numpy):
 
 
 def _factory(host, params):
-    return (_Warp if host.backend == "warp" else _Numpy)(params)
+    return {"warp": _Warp, "jax": _Jax}.get(host.backend, _Numpy)(params)
 
 
 def register(registry: Registry) -> None:

@@ -39,6 +39,7 @@ from ..guard import Guard, source_hash
 from ..hook import Arg, Buf, Data, Hook, Launch, Model, Once, When, Zero
 from ..host import Capability, Host, HostInfo, ModelFacts, NativeTiming, Provision, StageBinding
 from ..patch import PatchPoint, Target, original_of
+from ..ports import unwrap
 from ..sparsity import Sparsity
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
@@ -167,26 +168,43 @@ class ChainHost(Host):
     def __init__(self, model: SimpleNamespace | None = None, worlds: int = 4, seed: int = 0):
         self.model = model if model is not None else make_model(seed=seed)
         self.other_model = copy.copy(self.model)                       # not the host's own: calls on it are left alone
-        n, nu, w = self.model.nv, self.model.nu, int(worlds)
-        f32 = lambda *shape: np.zeros(shape, np.float32)
-        self.data = SimpleNamespace(
-            nworld=w, x=f32(w, n), v=f32(w, n), a=f32(w, n), t=f32(w), command=f32(w, nu),
-            drive_length=f32(w, nu), drive_velocity=f32(w, nu), drive_force=f32(w, nu), passive_force=f32(w, n),
-            band_diag=f32(w, n), band_off=f32(w, max(n - 1, 0)), rhs=f32(w, n),
-            H=np.full((w, n, n), np.nan, np.float32))
-        self.ns = SimpleNamespace(passive=_native_passive, actuate=_native_actuate, assemble=_native_assemble,
-                                  effective_solve=_native_effective_solve)
-        self.ns.forward = lambda m, d: _forward(m, d, self.ns)
+        self.data = self._make_data(int(worlds))
+        self.ns = self._make_ns()
         self._reviewed = {name: source_hash(getattr(self.ns, name))
                           for name in ("passive", "actuate", "assemble", "effective_solve", "forward")}
         self._buffers: dict = {}
         self._stages: dict | None = None
         self._rng = np.random.default_rng(seed)
 
+    # -- what a host over other arrays replaces (see ``jaxchain``) ----------------------------------
+    kernels = KERNELS
+
+    def _make_data(self, w: int) -> SimpleNamespace:
+        n, nu = self.model.nv, self.model.nu
+        f32 = lambda *shape: np.zeros(shape, np.float32)
+        return SimpleNamespace(
+            nworld=w, x=f32(w, n), v=f32(w, n), a=f32(w, n), t=f32(w), command=f32(w, nu),
+            drive_length=f32(w, nu), drive_velocity=f32(w, nu), drive_force=f32(w, nu), passive_force=f32(w, n),
+            band_diag=f32(w, n), band_off=f32(w, max(n - 1, 0)), rhs=f32(w, n), H=np.full((w, n, n), np.nan, np.float32))
+
+    def _make_ns(self) -> SimpleNamespace:
+        ns = SimpleNamespace(passive=_native_passive, actuate=_native_actuate, assemble=_native_assemble,
+                             effective_solve=_native_effective_solve)
+        ns.forward = lambda m, d: _forward(m, d, ns)
+        return ns
+
+    def _new_buffer(self, shape, dtype):
+        return np.zeros(shape, dtype)
+
+    def _zero(self, array) -> None:
+        array[...] = 0
+
     # -- running ----------------------------------------------------------------------------------
     def step(self) -> None:
         """One step of every world, through whatever is installed."""
-        _step(self.model, self.data, self.ns)
+        self._step(self.model, self.data, self.ns)
+
+    _step = staticmethod(_step)
 
     def forward(self) -> None:
         self.ns.forward(self.model, self.data)
@@ -194,10 +212,10 @@ class ChainHost(Host):
     def load(self, x, v=None) -> None:
         """Set every world's state (a vector shared by all worlds, or ``(worlds, n)``) and zero the time."""
         d = self.data
-        d.x[:] = x
-        d.v[:] = 0.0 if v is None else v
-        d.t[:] = 0.0
-        d.a[:] = 0.0
+        d.x[...] = x
+        d.v[...] = 0.0 if v is None else v
+        d.t[...] = 0.0
+        d.a[...] = 0.0
 
     # -- Host -------------------------------------------------------------------------------------
     def facts(self) -> ModelFacts:
@@ -212,7 +230,7 @@ class ChainHost(Host):
     def buffer(self, name, shape, dtype=np.float32):
         key = (name, tuple(shape))
         if key not in self._buffers:
-            self._buffers[key] = np.zeros(shape, dtype)
+            self._buffers[key] = self._new_buffer(shape, dtype)
         return self._buffers[key]
 
     def buffers(self) -> SimpleNamespace:
@@ -231,10 +249,10 @@ class ChainHost(Host):
                     raise ValueError("data world count mismatch")
 
             def zero(self, array):
-                array[...] = 0
+                host._zero(array)
 
             def launch(self, kernel, dims, inputs, outputs):
-                KERNELS[kernel](*inputs, *outputs)
+                host.kernels[kernel](*inputs, *outputs)
 
             def buffers(self):
                 return host.buffers()
@@ -263,12 +281,12 @@ class ChainHost(Host):
         if binding is None:
             raise CapabilityError(f"chain host cannot drive {stage}")
         rng, d, m = np.random.default_rng(seed), self.data, self.model
-        d.x[:] = rng.standard_normal(d.x.shape).astype(np.float32) * 0.1
-        d.v[:] = rng.standard_normal(d.v.shape).astype(np.float32)
-        d.command[:] = rng.standard_normal(d.command.shape).astype(np.float32)
-        d.t[:] = rng.uniform(0, 5, d.nworld).astype(np.float32)
+        d.x[...] = rng.standard_normal(tuple(d.x.shape)).astype(np.float32) * 0.1
+        d.v[...] = rng.standard_normal(tuple(d.v.shape)).astype(np.float32)
+        d.command[...] = rng.standard_normal(tuple(d.command.shape)).astype(np.float32)
+        d.t[...] = rng.uniform(0, 5, d.nworld).astype(np.float32)
         for name in ("a", "passive_force", "drive_force"):
-            getattr(d, name)[:] = SENTINEL
+            getattr(d, name)[...] = SENTINEL
         self.ns.forward(m if owned else self.other_model, d)
         return dict(effect=binding.oracle(self) if binding.oracle else None, nv=m.nv)
 
@@ -283,7 +301,7 @@ def _damping_wrap(original, host):
         if m is not host.model:
             return original(m, d)
         seen = copy.copy(m)
-        seen.damping = m.damping + damping
+        seen.damping = m.damping + unwrap(damping)
         original(seen, d)
 
     return dispatch
@@ -298,7 +316,7 @@ def _passive_oracle(host):
     d = host.data
     baseline = copy.deepcopy(d)
     original_of(host.ns.passive)(host.model, baseline)
-    return dict(delta=d.passive_force.astype(np.float64) - baseline.passive_force.astype(np.float64))
+    return dict(delta=np.asarray(d.passive_force, np.float64) - np.asarray(baseline.passive_force, np.float64))
 
 
 def _passive_force(host) -> StageBinding:
@@ -316,7 +334,7 @@ def _passive_force(host) -> StageBinding:
 
 def _control_oracle(host):
     d, m = host.data, host.model
-    return dict(actuator_force=d.drive_force, expected_actuator_force=m.gain * d.command.astype(np.float64))
+    return dict(actuator_force=np.asarray(d.drive_force), expected_actuator_force=m.gain * np.asarray(d.command, np.float64))
 
 
 def _control_law(host) -> StageBinding:
@@ -339,9 +357,9 @@ def _effective_sparsity(host) -> Sparsity:
 
 def _effective_oracle(host):
     """The host's own solve of the system it just assembled, against what is now in ``a``."""
-    expected = np.zeros_like(host.data.a)
+    expected = np.zeros(tuple(host.data.a.shape), np.float32)
     original_of(host.ns.effective_solve)(host.model, host.data, expected)
-    return dict(qacc=host.data.a.copy(), expected=expected)
+    return dict(qacc=np.asarray(host.data.a), expected=expected)
 
 
 def _effective_solve(host) -> StageBinding:

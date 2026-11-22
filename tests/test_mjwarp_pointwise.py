@@ -14,7 +14,8 @@ try:
 except Exception:                                    # pragma: no cover
     HAVE = False
 
-pytestmark = pytest.mark.skipif(not HAVE, reason="needs mujoco, mujoco_warp and CUDA")
+if not HAVE:                    # a module-level skip: the decorators below name things only a GPU build imports
+    pytest.skip("needs mujoco, mujoco_warp and CUDA", allow_module_level=True)
 
 if HAVE:
     from phost import GuardError, Registry, Selection, Session

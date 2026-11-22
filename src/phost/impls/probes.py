@@ -40,6 +40,15 @@ class _Numpy:
         return out
 
 
+class _Jax(_Numpy):
+    def observe(self, system):
+        import jax.numpy as jnp
+        from ..ports import unwrap
+        v, a = unwrap(system.qvel), unwrap(system.qacc)
+        system.value[...] = jnp.stack([jnp.abs(v).max(axis=1), jnp.abs(a).max(axis=1), jnp.sqrt((v * v).sum(axis=1))], axis=1)
+        self._last = system.value
+
+
 class _Warp(_Numpy):
     def observe(self, system):
         import warp as wp
@@ -50,7 +59,7 @@ class _Warp(_Numpy):
 
 
 def _factory(host, params):
-    return (_Warp if host.backend == "warp" else _Numpy)(params)
+    return {"warp": _Warp, "jax": _Jax}.get(host.backend, _Numpy)(params)
 
 
 def register(registry: Registry) -> None:
