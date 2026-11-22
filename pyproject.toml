@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "phost"
 version = "0.1.0.dev0"
-description = "Attach to a physics host, and swap, guard and measure its stages"
+description = "Hook the stages of a GPU physics step (MuJoCo Warp), put your own kernels behind a typed contract, and check them against a float64 reference."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}

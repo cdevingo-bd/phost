@@ -1,35 +1,38 @@
 # phost
 
-Attach to a physics host, and swap, guard and measure its stages.
+Hook the stages of a GPU physics step, put your own kernels behind a typed contract, and check them against a float64 reference.
 
-A stage is a named step of a host's computation with a machine-readable contract. An implementation
-is written against the contract; a host adapter maps the host's own function onto it. phost provides
-the contract types, one guarded and scoped install rule, a session that applies a selection of
-implementations to a host, a registry that describes itself as JSON, and a contract check that
-judges an implementation against a float64 reference.
+phost attaches to MuJoCo Warp's step at named points. Each point is a **stage**, such as the Newton linear solve, the passive
+force or the controller, and each stage has a **contract**: the arrays it reads and writes with their shapes and dtypes, a swap
+class (exact, approximate, model changing or observer), metrics and tolerances. An implementation is written against the
+contract and never against the host. A session installs it for the length of a `with` block, behind a check that the hooked
+function's source is one that has been reviewed, and removes it on every way out. `check_impl` runs an implementation on a real
+host and judges it against a float64 reference.
 
-Today: six stages (two exact solver swaps, a passive force law, a controller, a body force and a probe; see
-[docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, and a simulator-free fake host.
-The core has no required dependencies. See [docs/SPEC.md](docs/SPEC.md); to add a stage, [docs/ADDING_A_STAGE.md](docs/ADDING_A_STAGE.md).
+Six stages today (see [docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, and a simulator-free fake host. The
+core has no required dependencies. [docs/SPEC.md](docs/SPEC.md) is the specification;
+[docs/ADDING_A_STAGE.md](docs/ADDING_A_STAGE.md) is how to add a stage.
 
 ## How it fits together
 
-![How phost works: an implementation is written in phost-author, phost-coupledchol or your own code, registered against a stage contract, guarded and installed by a session on a host adapter that hooks the MuJoCo Warp step; phost-lab runs graphs in isolated workers, phost-score judges and ranks them, phost-dash shows it in a browser.](docs/architecture.svg)
+![MuJoCo Warp's step as six functions with six numbered splice points and a table of what each reads and writes; one splice in detail (derive the contract's ports from device arrays, call the implementation, write back, with a source-hash guard and a scoped install); and the check against a float64 reference, then the lab, score and dashboard that time, judge and show a graph.](docs/architecture.svg)
 
-Read it left to right.
-
-1. **Write an implementation.** [phost-author](https://github.com/cdevingo-bd/phost-author) turns a typed equation or a sandboxed
-   kernel into one, [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) ships a ready-made one, and you can write your own.
-   An implementation is written against a stage contract, never against a particular host.
-2. **The core does the careful part.** The contract says what a stage's ports, tolerances and swap class are. A session takes a
-   selection (stage, implementation, parameters), checks that the host's source is one that has been reviewed, installs the
-   implementation for the length of a `with` block, and puts everything back on every way out of it.
-3. **The host adapter reaches into the simulator.** It maps the host's own functions onto the contracts. The strip along the
-   bottom is the MuJoCo Warp step: orange boxes are the places an implementation can sit, and the label says whether it changes
-   the physics, replaces a solve with the same answer, or only reads.
-4. **Run it, judge it, look at it.** [phost-lab](https://github.com/cdevingo-bd/phost-lab) runs a graph in an isolated worker against native and
-   a native control, [phost-score](https://github.com/cdevingo-bd/phost-score) applies the gates for the swap class and keeps the ledger and the Pareto board, and
-   [phost-dash](https://github.com/cdevingo-bd/phost-dash) is the browser view over all of it, running on your own GPU.
+1. **The host step.** `mjw.step` is a fixed sequence of functions, captured as one CUDA graph. phost can splice at six points
+   (the numbered squares). The table gives, for each, the hooked function, whether the implementation runs before, after or
+   instead of it, the contract's ports, and the swap class. Only the mujoco_warp 3.17.0 source build has been reviewed; the
+   adapter refuses any other.
+2. **One splice.** The adapter derives the contract's ports from the host's device arrays (an alias, or one kernel launch),
+   calls the implementation's entry method, writes the result back, and lets the host function run or skips it. An
+   implementation comes from [phost-author](https://github.com/cdevingo-bd/phost-author) (a typed equation compiled to a Warp
+   kernel, or a sandboxed kernel), [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol), or your own code.
+   A stage is data: a contract, a judge that says how a run of it is measured, and a binding that says where it attaches
+   ([docs/ADDING_A_STAGE.md](docs/ADDING_A_STAGE.md)).
+3. **Check, then measure.** `check_impl` drives the host, records what the implementation was handed and wrote, and compares
+   it with a float64 reference within the contract's tolerances. [phost-lab](https://github.com/cdevingo-bd/phost-lab)
+   runs a graph in an isolated worker against native and a native control, and reports where a change could pay
+   (`profile`, `opportunities`) and where it applies (`applicability`);
+   [phost-score](https://github.com/cdevingo-bd/phost-score) applies the gate for the swap class and keeps a hash-chained
+   ledger and a Pareto board; [phost-dash](https://github.com/cdevingo-bd/phost-dash) is the browser view over all of it.
 
 ```python
 import phost
@@ -52,12 +55,12 @@ phost is one of six packages. None is on PyPI yet, so install from a clone, `pho
 
 | package | what it is |
 | --- | --- |
-| [phost](https://github.com/cdevingo-bd/phost) | this: the host layer and the stage contracts |
-| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | the coupled-block Cholesky and its phost implementation |
-| [phost-lab](https://github.com/cdevingo-bd/phost-lab) | graphs, scenes, an isolated runner and a live view feed |
-| [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations and sandboxed kernels |
-| [phost-score](https://github.com/cdevingo-bd/phost-score) | judging rules, a Pareto board and a tamper-evident ledger |
-| [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local dashboard that runs it all on your own GPU |
+| [phost](https://github.com/cdevingo-bd/phost) | this: stage contracts, the guarded install, host adapters, the contract check |
+| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | coupled-block Cholesky, as an implementation of two stages |
+| [phost-lab](https://github.com/cdevingo-bd/phost-lab) | runs a graph of implementations in an isolated worker; timing, profile, opportunity and applicability reports |
+| [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations compiled to Warp kernels, and a sandbox for submitted kernels |
+| [phost-score](https://github.com/cdevingo-bd/phost-score) | gates by swap class, a Pareto board, a hash-chained ledger |
+| [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local browser view over the above; the GPU work stays in the lab's workers |
 
 ```
 git clone https://github.com/cdevingo-bd/phost && pip install -e phost     # repeat for the others, in the order above
