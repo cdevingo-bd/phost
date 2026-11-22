@@ -27,4 +27,24 @@ with phost.Session(host, [phost.Selection("newton.linear_solve", coupled.SCAN)])
     print(session.metrics())
 ```
 
+## The set
+
+phost is one of six packages. None is on PyPI yet, so install from a clone, `phost` first:
+
+| package | what it is |
+| --- | --- |
+| [phost](https://github.com/cdevingo-bd/phost) | this: the host layer and the stage contracts |
+| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | the coupled-block Cholesky and its phost implementation |
+| [phost-lab](https://github.com/cdevingo-bd/phost-lab) | graphs, scenes, an isolated runner and a live view feed |
+| [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations and sandboxed kernels |
+| [phost-score](https://github.com/cdevingo-bd/phost-score) | judging rules, a Pareto board and a tamper-evident ledger |
+| [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local dashboard that runs it all on your own GPU |
+
+```
+git clone https://github.com/cdevingo-bd/phost && pip install -e phost     # repeat for the others, in the order above
+```
+
+The GPU parts are tested against the MuJoCo Warp 3.17.0 source build (with `mujoco==3.17.0`, `warp-lang==1.16.0`); the
+adapter refuses a build it has not been reviewed against.
+
 MIT licensed.
