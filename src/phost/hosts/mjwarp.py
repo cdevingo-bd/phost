@@ -250,6 +250,28 @@ class MJWarpHost(Host):
             self._buffers["effective/rhs"] = wp.zeros((n, nv), dtype=wp.float32, device=self.device)
         return SimpleNamespace(matrix=self._buffers["effective/matrix"], rhs=self._buffers["effective/rhs"])
 
+    def hook_support(self):
+        host, wp = self, self._wp
+
+        class Support:
+            def sizes(self):
+                return dict(world=int(host.data.nworld), nv=int(host.model.nv), nu=int(host.model.nu), nbody=int(host.model.nbody))
+
+            def check(self, d):
+                if d.nworld != int(host.data.nworld) or d.qpos.device != host.device:
+                    raise ValueError("data world count or device mismatch")
+
+            def zero(self, array):
+                array.zero_()
+
+            def launch(self, kernel, dims, inputs, outputs):
+                wp.launch(getattr(host._k, kernel), dim=dims, device=host.device, inputs=inputs, outputs=outputs)
+
+            def buffers(self):
+                return host.buffers()
+
+        return Support()
+
     def probe_buffer(self, width: int):
         """The host-owned ``value`` array of a probe of this width (created once, so graphs can capture it)."""
         key = f"probe/{width}"

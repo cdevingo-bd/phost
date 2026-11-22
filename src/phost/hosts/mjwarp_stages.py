@@ -20,7 +20,7 @@ from ..stages import dof_passive_force as pf
 from ..stages import effective_solve as es
 from ..stages import probe_state as ps
 from . import mjwarp as adapter
-from ._dispatch import Arg, Buf, Data, Dim, Hook, Launch, Model, Once, When, Zero
+from ..hook import Arg, Buf, Data, Dim, Hook, Launch, Model, Once, When, Zero
 
 
 def _timing(module, attribute) -> NativeTiming:
@@ -116,12 +116,28 @@ def _effective_oracle(host):
     return dict(qacc=actual, expected=scratch.numpy().astype(np.float64))
 
 
+def _effective_sparsity(host):
+    """The pattern of M_hat = M + diag + K, read from the model's own index arrays: where the assembly kernel writes."""
+    from ..sparsity import Sparsity
+    if host._effective_blocker:
+        return None
+    m, nv = host.model, int(host.model.nv)
+    m_rowadr, m_col = m.M_mulm_rowadr.numpy(), m.M_mulm_col.numpy()
+    k_rownnz, k_rowadr, k_colind = m.efm_K_rownnz.numpy(), m.efm_K_rowadr.numpy(), m.efm_K_colind.numpy()
+    pairs = []
+    for row in range(nv):
+        pairs.extend((row, int(c)) for c in m_col[m_rowadr[row]:m_rowadr[row + 1]])
+        pairs.extend((row, int(c)) for c in k_colind[k_rowadr[row]:k_rowadr[row] + k_rownnz[row]])
+    return Sparsity.from_pairs(nv, pairs)
+
+
 @adapter.register_binding
 def effective_solve(host) -> StageBinding:
     derivative = adapter._derivative_module()
     matrix, rhs = Once(lambda host, runtime: host.effective_buffers().matrix), Once(lambda host, runtime: host.effective_buffers().rhs)
     hook = Hook(
-        "instead", es.EffectiveSystem, ports=dict(h=matrix, rhs=rhs, qacc=Arg(0)),
+        "instead", es.EffectiveSystem,
+        ports=dict(h=matrix, rhs=rhs, qacc=Arg(0), sparsity=When("sparsity", Once(lambda host, runtime: _effective_sparsity(host)))),
         # the host makes one call, eff_solve(m, d, qacc); a call that passes its own right-hand side is not this one
         handles=lambda args, kwargs: len(args) == 1 and not kwargs,
         prepare=(Launch("effective_rhs", ("world", "nv"), (Data("qfrc_smooth"), Data("efm_c"), Data("efm_ca")), (rhs,)),
@@ -134,4 +150,4 @@ def effective_solve(host) -> StageBinding:
         hook.make(es.CONTRACT.entry), applicable=lambda host: host._effective_blocker or None,
         native_timing=NativeTiming(lambda host: None if host._effective_blocker else (
             lambda: original_of(derivative.eff_solve)(host.model, host.data, host.data.qacc_smooth))),
-        oracle=_effective_oracle)
+        oracle=_effective_oracle, extensions={"sparsity": Provision()}, sparsity=_effective_sparsity)

@@ -8,7 +8,7 @@ it is measured, so a new stage needs no change to the check ([docs/ADDING_A_STAG
 | stage | swap class | reference | hook on MJWarp | what an implementation provides |
 | --- | --- | --- | --- | --- |
 | `newton.linear_solve` | exact | `newton.linear_solve.float64`, shipped with the stage | `solver._cholesky_factorize_solve` | `solve(system)`: the Newton step for `H`, `g` |
-| `effective.solve` | exact | `effective.solve.float64`, shipped with the stage | `derivative.eff_solve` | `solve(system)`: `x = M_hat^-1 rhs` for the host-assembled effective metric (discrete integrator only) |
+| `effective.solve` | exact | `effective.solve.float64`, shipped with the stage | `derivative.eff_solve` | `solve(system)`: `x = M_hat^-1 rhs` for the host-assembled effective metric (discrete integrator only); extension `sparsity` hands over the matrix's nonzero pattern |
 | `dof.passive_force` | model changing | the implementation's own, `Impl.reference` | after `passive.passive` | `apply(system)`: force per scalar DOF from `q`, `v`, `time` |
 | `control.law` | model changing | the implementation's own | before `forward.fwd_actuation` | `apply(system)`: `ctrl` from actuator `length`, `velocity`, `time` |
 | `probe.state` | observer | the implementation's own | after `forward.forward` | `observe(system)`: `value[world, width]` from `qpos`, `qvel`, `qacc`, `time` |

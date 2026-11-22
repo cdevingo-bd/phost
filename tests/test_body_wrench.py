@@ -1,29 +1,27 @@
-"""``body.wrench``: a stage added with a contract module, a binding module and this file, and nothing else.
+"""``body.wrench``: a stage added with a contract module, a binding module per host and this file, and nothing else.
 
-It is the held-out test of the stage machinery: its dimension (``body``), its hook (``forward.xfrc_accumulate``) and its host-side
-oracle (MuJoCo (C) for the same wrench) are all new, and ``check_impl``, the test driver, the session and the fake host were not
-touched to make it work. Needs mujoco, mujoco_warp and CUDA, and a reviewed build.
+It is the held-out test of the stage machinery: its dimension (``body``), its hook (``forward.xfrc_accumulate``) and its
+host-side oracle are all new, and ``check_impl``, the test drivers and the session were not touched to make it work. The
+tests run on both hosts: the fake host (numpy, no simulator) always, and MuJoCo Warp when mujoco, mujoco_warp and CUDA are
+available (its oracle is MuJoCo (C) for the same wrench).
 """
 
+import numpy as np
 import pytest
+
+from phost import GuardError, Impl, ImplKind, ParamSpec, Registry, Selection, Session, stages
+from phost.guard import source_hash
+from phost.stages import body_wrench as bw
+from phost.testing.contract import check_impl
+from phost.testing.fake import FakeHost
 
 try:
     import mujoco
     import mujoco_warp as mjw
-    import numpy as np
     import warp as wp
-    HAVE = wp.is_cuda_available()
+    HAVE_GPU = wp.is_cuda_available()
 except Exception:                                    # pragma: no cover
-    HAVE = False
-
-pytestmark = pytest.mark.skipif(not HAVE, reason="needs mujoco, mujoco_warp and CUDA")
-
-if HAVE:
-    from phost import GuardError, Impl, ImplKind, ParamSpec, Registry, Selection, Session, stages
-    from phost.hosts import mjwarp_body_wrench as binding
-    from phost.stages import body_wrench as bw
-    from phost.testing.contract import check_impl
-    from phost.testing.mjwarp import DrivableMJWarpHost
+    HAVE_GPU = False
 
 XML = """<mujoco><option timestep="0.002" integrator="Euler" solver="Newton"/>
 <worldbody>
@@ -34,7 +32,8 @@ XML = """<mujoco><option timestep="0.002" integrator="Euler" solver="Newton"/>
 </worldbody></mujoco>"""
 
 
-def make_host(nworld=3):
+def make_mjwarp_host(nworld=3):
+    from phost.testing.mjwarp import DrivableMJWarpHost
     cm = mujoco.MjModel.from_xml_string(XML)
     cd = mujoco.MjData(cm)
     mujoco.mj_forward(cm, cd)
@@ -42,6 +41,17 @@ def make_host(nworld=3):
         model = mjw.put_model(cm)
         data = mjw.put_data(cm, cd, nworld=nworld, nconmax=16 * nworld, njmax=128)
     return DrivableMJWarpHost(model, data, cpu_model=cm, cpu_data=cd)
+
+
+def to_numpy(array):
+    return array.numpy() if hasattr(array, "numpy") else np.asarray(array)
+
+
+def put(array, value):
+    if hasattr(array, "assign"):
+        array.assign(value)
+    else:
+        array[...] = value
 
 
 def drag(velocity, c):
@@ -57,7 +67,7 @@ class Drag:
         self.c = params["c"]
 
     def apply(self, system):
-        system.wrench.assign(drag(system.cvel.numpy().astype(np.float64), self.c).astype(np.float32))
+        put(system.wrench, drag(to_numpy(system.cvel).astype(np.float64), self.c).astype(np.float32))
 
     def metrics(self):
         return {}
@@ -67,11 +77,11 @@ class TorqueFirst(Drag):
     """The right law written into the wrong layout: torque then force. It disagrees with its own float64 law."""
 
     def apply(self, system):
-        w = drag(system.cvel.numpy().astype(np.float64), self.c)
-        system.wrench.assign(np.concatenate([w[..., 3:], w[..., :3]], axis=-1).astype(np.float32))
+        w = drag(to_numpy(system.cvel).astype(np.float64), self.c)
+        put(system.wrench, np.concatenate([w[..., 3:], w[..., :3]], axis=-1).astype(np.float32))
 
 
-def impl(name, runtime, reference):
+def impl(name, runtime):
     return Impl(id=f"test/{name}", stage=bw.NAME, stage_version=1, version="1", title=name, kind=ImplKind.BUILTIN,
                 params=(ParamSpec("c", "float", 0.7, "drag coefficient"),),
                 factory=lambda host, params: runtime(host, params),
@@ -82,14 +92,14 @@ def impl(name, runtime, reference):
 def registry():
     reg = Registry()
     stages.register_all(reg)
-    reg.add_impl(impl("drag", Drag, None))
-    reg.add_impl(impl("swapped", TorqueFirst, None))
+    reg.add_impl(impl("drag", Drag))
+    reg.add_impl(impl("swapped", TorqueFirst))
     return reg
 
 
-@pytest.fixture(scope="module")
-def host():
-    return make_host()
+@pytest.fixture(params=["fake", pytest.param("mjwarp", marks=pytest.mark.skipif(not HAVE_GPU, reason="needs mujoco_warp and CUDA"))])
+def host(request):
+    return FakeHost(nv=12, world_count=3) if request.param == "fake" else make_mjwarp_host()
 
 
 def test_the_stage_is_registered_with_its_judge_and_a_binding(host, registry):
@@ -106,26 +116,55 @@ def test_an_implementation_that_applies_the_wrench_the_host_expects_passes(host,
 def test_a_wrench_in_the_wrong_layout_fails_its_own_law_while_the_host_still_applies_it_faithfully(host, registry):
     verdict = check_impl(host, Selection(bw.NAME, "test/swapped"), registry)
     assert not verdict.ok and any("max_law_error" in f for f in verdict.failures)
-    assert not any("max_effect_error" in f for f in verdict.failures)     # the host did what MuJoCo does with that wrench
+    assert not any("max_effect_error" in f for f in verdict.failures)     # the host did what it does with that wrench
 
 
 def test_the_wrench_actually_moves_the_trajectory(host, registry):
     with Session(host, [Selection(bw.NAME, "test/drag", {"c": 5.0})], registry) as session:
         host.drive(bw.NAME, seed=1)
         assert session.metrics()[bw.NAME]["calls"] >= 1
-        assert np.abs(host.data.xfrc_applied.numpy()).max() > 0
+        assert np.abs(to_numpy(host.data.xfrc_applied)).max() > 0
 
 
-def test_native_timing_runs_the_hosts_own_function(host):
+# ---- the fake host only: a host that applies the wrench wrongly is caught by the oracle, not by the stage ----
+
+def test_a_host_that_applies_the_wrench_with_the_wrong_sign_fails_the_effect_check(registry):
+    host = FakeHost(nv=12, world_count=3)
+
+    def flipped(m, d, qfrc):
+        qfrc -= np.einsum("bkn,wbk->wn", m.jac, d.xfrc_applied.astype(np.float64)).astype(np.float32)
+
+    host.ns.xfrc_accumulate = flipped
+    host._reviewed["xfrc_accumulate"] = source_hash(flipped)         # this build is the one that is reviewed
+    verdict = check_impl(host, Selection(bw.NAME, "test/drag"), registry)
+    assert not verdict.ok and any("max_effect_error" in f for f in verdict.failures)
+    assert not any("max_law_error" in f for f in verdict.failures)       # the implementation did its job
+
+
+def test_the_fake_host_refuses_an_unreviewed_xfrc_accumulate(registry):
+    host = FakeHost(nv=12, world_count=2)
+    host._reviewed["xfrc_accumulate"] = "0" * 64
+    with pytest.raises(GuardError):
+        with Session(host, [Selection(bw.NAME, "test/drag")], registry):
+            pass
+
+
+# ---- MuJoCo Warp only ----
+
+@pytest.mark.skipif(not HAVE_GPU, reason="needs mujoco_warp and CUDA")
+def test_native_timing_runs_the_hosts_own_function():
+    host = make_mjwarp_host()
     run = host.stage(bw.NAME).native_timing.run(host)
     assert run is not None
     run()
     wp.synchronize()
 
 
+@pytest.mark.skipif(not HAVE_GPU, reason="needs mujoco_warp and CUDA")
 def test_a_build_that_is_not_in_the_reviewed_table_is_refused(registry, monkeypatch):
+    from phost.hosts import mjwarp_body_wrench as binding
     monkeypatch.setattr(binding, "REVIEWED_XFRC", {})
-    fresh = make_host(nworld=1)
+    fresh = make_mjwarp_host(nworld=1)
     with pytest.raises(GuardError, match="unreviewed source sha256 f8d20c77"):
         with Session(fresh, [Selection(bw.NAME, "test/drag")], registry):
             pass

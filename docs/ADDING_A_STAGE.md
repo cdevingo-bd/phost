@@ -10,8 +10,9 @@ each body), which was added after the abstraction was written, as a check that i
 | --- | --- | --- |
 | `stages/<stage>.py` | the contract, the system the runtime is handed, and the judge | 88 lines |
 | `hosts/mjwarp_<stage>.py` | the binding: where it attaches, where each port comes from, when it applies, how to time and check it | 48 lines |
-| `tests/test_<stage>.py` | that the check passes a correct implementation and catches each fault | 131 lines |
+| `tests/test_<stage>.py` | that the check passes a correct implementation and catches each fault | 170 lines (both hosts) |
 | registrations | one name in `stages.MODULES`, one import at the bottom of `hosts/mjwarp.py` | 2 lines |
+| `testing/fake_<stage>.py` (optional) | the same stage on the fake host, so it runs with no simulator and no GPU | 32 lines |
 
 `effective.solve`, written before this existed, took 14 files and 625 lines: its own dispatch function, a branch in the
 checker, a branch in the GPU driver, a blocker flag threaded through the host facts and a hand-picked scene in two other repos.
@@ -52,7 +53,7 @@ and every metric inside its tolerance.
 
 ## 2. The binding: where it attaches
 
-A `StageBinding` ties the contract to one host. On MuJoCo Warp it is a table, not a function (`hosts/_dispatch.py`):
+A `StageBinding` ties the contract to one host. It is a table, not a function (`phost/hook.py`; a host supplies the few operations a table needs through `hook_support()`):
 
 ```python
 @adapter.register_binding
@@ -86,11 +87,28 @@ rules out (a wrong law, an input written, nondeterminism, a NaN, an adapter that
 metric is meant to catch and assert the metric, and not some other one, reports it. The held-out stage's first draft of one
 test assumed the wrong metric would fire; the test was rewritten to match what the contract actually checks.
 
+## The fake host
+
+`phost.testing.fake.FakeHost` takes the same tables: a factory `register_binding`-ed in `testing/fake_stages.py` (or its own
+module, as `fake_body_wrench.py` is) gives the stage to the fake host with numpy arrays behind the sources, and
+`FakeHost.drive` runs it through `check_impl` with no simulator. The `body.wrench` tests run on both hosts from one file.
+A binding's `oracle` is what makes this work for any stage: the fake host's driver has no stage names in it either. What
+`Launch` names runs as a Python function on the fake host (`fake.KERNELS`) and as a Warp kernel on the GPU host.
+
+## Structure of the system matrix
+
+A stage whose port is a matrix can offer the `sparsity` extension (`effective.solve` does). An implementation that declares
+`extensions_used=("sparsity",)` is handed `system.sparsity`, a `phost.sparsity.Sparsity`: the nonzero pattern of the
+matrix, a fact about the host's model that holds for every call, with the questions a solver asks of it (which rows are
+coupled, how wide the band is, which order narrows it). The binding's `sparsity(host)` gives the same fact to a tool without
+installing anything; `phost-lab sparsity --scene S` prints it with the work a structure-exploiting factorization could save.
+The pattern is static. The Newton solve's `structure_hint` is the per-call analogue (its pattern changes with the contacts),
+and its flags are `Sparsity.coupled_rows()` of that call's matrix.
+
 ## What stays outside the recipe
 
-* The fake host (`phost.testing.fake`) has no generic binding support; a stage is exercised there by hand.
-* A stage that needs a derived port no table source expresses (a sparsity pattern, a reordering) needs a new source in
-  `_dispatch.py`. Add it there once and every stage can use it.
+* A stage that needs a derived port no table source expresses (a reordering applied on the device, say) needs a new source or
+  step in `hook.py`. Add it there once and every stage on every host can use it.
 * Judging is host-neutral; a binding is per host. A second host (MJLab has its own adapter) needs its own binding module.
 
 ## Measuring where a change could pay, and where it applies
@@ -98,3 +116,4 @@ test assumed the wrong metric would fire; the test was rewritten to match what t
 * `phost-lab applicability`: stages by scenes, from each binding's `applicable` and each implementation's own `applicable`.
 * `phost-lab opportunities --scene S`: each stage's native share of the step, its speedup ceiling `1 / (1 - share)` for
   speed swaps, and whether it applies here and why not. See the phost-lab README.
+* `phost-lab sparsity --scene S`: the structure of each stage's matrix. The same reports are a card in phost-dash's Build screen.

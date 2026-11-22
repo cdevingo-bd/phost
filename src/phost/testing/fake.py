@@ -21,9 +21,16 @@ from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
 from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
-from ..stages import probe_state as ps
 
 SENTINEL = 123.0
+
+BINDING_FACTORIES: list = []
+
+
+def register_binding(factory):
+    """Register ``factory(host) -> StageBinding`` as one more stage the fake host offers (see ``fake_stages``)."""
+    BINDING_FACTORIES.append(factory)
+    return factory
 
 
 def _native_solve(m, d, ctx, skip_unchanged=False, skip_noflip=False):
@@ -71,15 +78,36 @@ def _native_actuation(m, d):
                            + BIAS_VELOCITY * d.actuator_velocity).astype(np.float32)
 
 
+def _native_xfrc_accumulate(m, d, qfrc):
+    """Fold the wrench on each body into a generalized force through the body Jacobians, as MuJoCo does: qfrc += J^T w."""
+    qfrc += np.einsum("bkn,wbk->wn", m.jac, d.xfrc_applied.astype(np.float64)).astype(np.float32)
+
+
 def _native_forward(m, d, ns=None):
     nu = m.nu
     d.actuator_length[:] = d.qpos[:, :nu]
     d.actuator_velocity[:] = d.qvel[:, :nu]
+    d.xpos[:] = (d.qpos @ m.kin_pos).reshape(d.xpos.shape)            # kinematics: body pose and velocity from the state
+    d.cvel[:] = (d.qvel @ m.kin_vel).reshape(d.cvel.shape)
     ns.passive(m, d)
     ns.fwd_actuation(m, d)
     pad = np.zeros_like(d.qvel)
     pad[:, :nu] = d.actuator_force
-    d.qacc[:] = -d.qpos + d.qfrc_passive + pad
+    d.qfrc_smooth[:] = d.qfrc_passive + pad
+    ns.xfrc_accumulate(m, d, d.qfrc_smooth)
+    d.qacc[:] = -d.qpos + d.qfrc_smooth
+
+
+# The fake host's kernels: what ``Launch`` names run as on this host. Same names and argument order as the GPU host's.
+def _gather_scalar_q(qpos, scalar, q):
+    q[:] = np.where(scalar.astype(bool), qpos[:, :q.shape[1]], 0.0)
+
+
+def _add_scalar_force(scalar, force, qfrc_passive):
+    qfrc_passive += np.where(scalar.astype(bool), force, 0.0).astype(qfrc_passive.dtype)
+
+
+KERNELS = dict(gather_scalar_q=_gather_scalar_q, add_scalar_force=_add_scalar_force)
 
 
 class FakeHost(Host):
@@ -87,28 +115,37 @@ class FakeHost(Host):
     capabilities = Capability.PATCH | Capability.NATIVE
 
     def __init__(self, nv: int = 12, world_count: int = 4, nv_pad: int = 16, seed: int = 0, coupled: int = 4,
-                 nu: int = 3, damping: float = DAMPING):
+                 nu: int = 3, damping: float = DAMPING, eff_bandwidth: int | None = None):
         self.ns = SimpleNamespace(solve_hook=_native_solve, assemble=_assemble, passive=_native_passive,
-                                  fwd_actuation=_native_actuation, euler=_native_euler, eff_solve=_native_eff_solve)
+                                  fwd_actuation=_native_actuation, euler=_native_euler, eff_solve=_native_eff_solve,
+                                  xfrc_accumulate=_native_xfrc_accumulate)
         self.ns.forward = lambda m, d: _native_forward(m, d, self.ns)
         scalar = np.ones(nv, np.int32)
         scalar[-3:] = 0                                  # the last DOFs stand in for a free joint
         dof_damping = np.full(nv, damping, np.float32)
-        self.model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping)
-        self.other_model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping)
+        nbody = max(1, min(4, nv // 3))
+        shape = np.random.default_rng(12345)                       # the fake robot's geometry: the same for every host
+        kin = dict(nbody=nbody, kin_pos=shape.standard_normal((nv, 3 * nbody)) / np.sqrt(nv),
+                   kin_vel=shape.standard_normal((nv, 6 * nbody)) / np.sqrt(nv), jac=shape.standard_normal((nbody, 6, nv)))
+        self.model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping, **kin)
+        self.other_model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping, **kin)
         f32 = lambda *shape: np.zeros(shape, np.float32)
         self.data = SimpleNamespace(nworld=world_count, qpos=f32(world_count, nv), qvel=f32(world_count, nv),
                                     qacc=f32(world_count, nv), time=f32(world_count), ctrl=f32(world_count, nu),
                                     qfrc_passive=f32(world_count, nv), actuator_length=f32(world_count, nu),
                                     actuator_velocity=f32(world_count, nu), actuator_force=f32(world_count, nu),
                                     eff_h=f32(world_count, nv_pad, nv_pad), eff_rhs=f32(world_count, nv_pad),
-                                    eff_qacc=f32(world_count, nv))
+                                    eff_qacc=f32(world_count, nv), xpos=f32(world_count, nbody, 3),
+                                    cvel=f32(world_count, nbody, 6), xfrc_applied=f32(world_count, nbody, 6),
+                                    qfrc_smooth=f32(world_count, nv))
         self._buffers: dict = {}
         self.rng = np.random.default_rng(seed)
         self.coupled = coupled
+        self.eff_bandwidth = eff_bandwidth          # the effective system's half bandwidth; None: a dense system
         self._reviewed_hook = source_hash(self.ns.solve_hook)
         self._reviewed_assemble = source_hash(self.ns.assemble)
-        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward", "euler", "eff_solve")}
+        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in
+                          ("passive", "fwd_actuation", "forward", "euler", "eff_solve", "xfrc_accumulate")}
         self._stages = None
 
     # -- Host ---------------------------------------------------------------------------------
@@ -131,13 +168,9 @@ class FakeHost(Host):
             })
             self._stages = {nl.NAME: StageBinding(nl.CONTRACT, point, _make_dispatch,
                                                   extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
-            self._stages[es.NAME] = StageBinding(es.CONTRACT, self._point(es.NAME, "eff_solve"), _effective_dispatch)
-            for contract, attribute, make in ((pf.CONTRACT, "passive", _passive_dispatch),
-                                              (cl.CONTRACT, "fwd_actuation", _control_dispatch),
-                                              (ps.CONTRACT, "forward", _probe_dispatch)):
-                self._stages[contract.name] = StageBinding(contract, self._point(contract.name, attribute), make)
-            self._stages[pf.NAME] = dataclasses.replace(self._stages[pf.NAME], extensions={
-                "implicit_damping": Provision(point=self._point(pf.NAME, "euler"), wrap=_euler_wrap)})
+            for factory in BINDING_FACTORIES:                 # every other stage is a table (see fake_stages.py)
+                binding = factory(self)
+                self._stages[binding.contract.name] = binding
         return self._stages
 
     def _point(self, stage, attribute):
@@ -153,6 +186,33 @@ class FakeHost(Host):
         if key not in self._buffers:
             self._buffers[key] = np.zeros(shape, dtype)
         return self._buffers[key]
+
+    def buffers(self) -> SimpleNamespace:
+        """The host's persistent buffers a table names with ``Buf(...)``."""
+        shape = self.data.qvel.shape
+        return SimpleNamespace(q=self.buffer("q", shape), force=self.buffer("force", shape), damping=self.buffer("damping", shape))
+
+    def hook_support(self):
+        host = self
+
+        class Support:
+            def sizes(self):
+                return dict(world=int(host.data.nworld), nv=int(host.model.nv), nu=int(host.model.nu), nbody=int(host.model.nbody))
+
+            def check(self, d):
+                if d.nworld != host.data.nworld:
+                    raise ValueError("data world count mismatch")
+
+            def zero(self, array):
+                array[...] = 0
+
+            def launch(self, kernel, dims, inputs, outputs):
+                KERNELS[kernel](*inputs, *outputs)
+
+            def buffers(self):
+                return host.buffers()
+
+        return Support()
 
     # -- driving a call, for tests and conformance --------------------------------------------
     def make_ctx(self, active=None, *, quad=None, state=None):
@@ -200,6 +260,9 @@ class FakeHost(Host):
         for w in range(d.nworld):
             a = rng.standard_normal((n, n))
             sym = a @ a.T / n + np.diag(rng.uniform(1.0, 3.0, n))
+            if self.eff_bandwidth is not None:                  # a system with structure: entries beyond the band are zero
+                sym = np.where(np.abs(np.subtract.outer(np.arange(n), np.arange(n))) <= self.eff_bandwidth, sym, 0.0)
+                sym += np.eye(n) * (np.abs(sym).sum(axis=1).max())       # diagonally dominant, so still positive definite
             d.eff_h[w, :n, :n] = np.triu(sym).astype(np.float32) + np.tril(np.full((n, n), 7.0, np.float32), -1)
             d.eff_rhs[w, :n] = rng.standard_normal(n)
         d.eff_qacc[:] = SENTINEL
@@ -213,8 +276,9 @@ class FakeHost(Host):
         for name in ("qpos", "qvel", "ctrl"):
             getattr(d, name)[:] = rng.standard_normal(getattr(d, name).shape).astype(np.float32)
         d.time[:] = rng.uniform(0, 5, d.nworld).astype(np.float32)
-        for name in ("qacc", "qfrc_passive", "actuator_force"):
+        for name in ("qacc", "qfrc_passive", "actuator_force", "qfrc_smooth"):
             getattr(d, name)[:] = SENTINEL
+        d.xfrc_applied[:] = 0.0
 
     def integrate(self, *, seed: int = 0, owned: bool = True):
         """One forward() and one Euler step from a random state. Returns the velocity afterwards."""
@@ -225,22 +289,16 @@ class FakeHost(Host):
         return self.data.qvel.copy()
 
     def _drive_forward(self, stage, *, owned, seed):
-        """Run one forward() on a random state, return what the host did with the stage's output."""
-        if stage not in (pf.NAME, cl.NAME, ps.NAME):
+        """Run one forward() on a random state; what the host did with the stage's output is the binding's ``oracle``.
+
+        Any stage a binding offers is driven this way, so adding a stage to the fake host needs no change here.
+        """
+        binding = self.stages().get(stage)
+        if binding is None:
             raise CapabilityError(f"fake host cannot drive {stage}")
-        d, m = self.data, self.model
         self._random_state(seed)
-        baseline = copy.deepcopy(d)
-        original_of(self.ns.passive)(m, baseline)
-        self.ns.forward(m if owned else self.other_model, d)
-        effect = None
-        if stage == pf.NAME:
-            effect = dict(delta=d.qfrc_passive.astype(np.float64) - baseline.qfrc_passive.astype(np.float64))
-        elif stage == cl.NAME:
-            ctrl = d.ctrl.astype(np.float64)
-            effect = dict(actuator_force=d.actuator_force, expected_actuator_force=(
-                GAIN * ctrl + BIAS_LENGTH * d.actuator_length + BIAS_VELOCITY * d.actuator_velocity))
-        return dict(effect=effect, nv=m.nv)
+        self.ns.forward(self.model if owned else self.other_model, self.data)
+        return dict(effect=binding.oracle(self) if binding.oracle else None, nv=self.model.nv)
 
 
 def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
@@ -274,62 +332,4 @@ def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
     return dispatch
 
 
-def _effective_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
-    def dispatch(m, d, qacc, qfrc=None):
-        if m is not host.model:
-            return original(m, d, qacc, qfrc)
-        runtime.solve(es.EffectiveSystem(h=d.eff_h, rhs=d.eff_rhs if qfrc is None else qfrc, qacc=qacc))
-
-    return dispatch
-
-
-def _passive_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
-    damping = host.buffer("damping", host.data.qvel.shape) if "implicit_damping" in allowed else None
-
-    def dispatch(m, d):
-        original(m, d)
-        if m is not host.model:
-            return
-        scalar = m.scalar.astype(bool)
-        q = np.where(scalar, d.qpos[:, :m.nv], 0.0).astype(np.float32)
-        force = np.zeros_like(d.qvel)
-        if damping is not None:
-            damping[:] = 0.0
-        runtime.apply(pf.DofForceSystem(q=q, v=d.qvel, time=d.time, scalar=m.scalar, force=force, damping=damping))
-        d.qfrc_passive += np.where(scalar, force, 0.0).astype(np.float32)
-
-    return dispatch
-
-
-def _euler_wrap(original, host: FakeHost):
-    """Euler integrates the model's damping implicitly: give it the law's damping on top, for this call."""
-    damping = host.buffer("damping", host.data.qvel.shape)
-
-    def dispatch(m, d):
-        if m is not host.model:
-            return original(m, d)
-        seen = copy.copy(m)
-        seen.dof_damping = (m.dof_damping + damping).astype(np.float32)
-        original(seen, d)
-
-    return dispatch
-
-
-def _control_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
-    def dispatch(m, d):
-        if m is host.model:
-            runtime.apply(cl.ControlSystem(length=d.actuator_length, velocity=d.actuator_velocity, time=d.time, ctrl=d.ctrl))
-        original(m, d)
-
-    return dispatch
-
-
-def _probe_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
-    value = host.buffer(f"probe/{runtime.width}", (host.data.nworld, runtime.width))
-
-    def dispatch(m, d):
-        original(m, d)
-        if m is host.model:
-            runtime.observe(ps.ProbeSystem(qpos=d.qpos, qvel=d.qvel, qacc=d.qacc, time=d.time, value=value))
-
-    return dispatch
+from . import fake_body_wrench, fake_stages   # noqa: E402,F401  (they register their bindings on import)

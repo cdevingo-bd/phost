@@ -18,6 +18,8 @@ means swapping an implementation.
 | Contracts `dof.passive_force`, `control.law`, `probe.state` (see [CATALOG.md](CATALOG.md)) | `stages/` | numpy for evaluation |
 | Built-in implementations of those three, numpy and Warp backends, each with its float64 reference | `impls/` | numpy, warp |
 | MuJoCo Warp and MJLab adapters (what each stage relies on: [MJWARP_STEP.md](MJWARP_STEP.md)) | `hosts/mjwarp.py` | warp, mujoco_warp |
+| Stage dispatch as data (`Hook`), shared by every host | `hook.py` | stdlib |
+| The nonzero structure of a system matrix, as a host-provided extension | `sparsity.py` | stdlib |
 | Simulator-free fake host, faulty runtimes, `check_impl` | `testing/` | numpy |
 
 The core imports only the standard library. Adapters import their simulator lazily. Arrays are
@@ -69,6 +71,10 @@ warmup and capture, not replay. Keep the host and session alive while replaying 
   `damping` (its -d force / d v) and the host's Euler step integrates it implicitly, like the model's own. An
   implementation lists extensions it needs in `extensions_used` (refused if the host lacks one) and extensions it
   merely likes in `extensions_optional` (a missing or unreviewed one is recorded as an advisory and the law runs without).
+* **Structure is a fact about the model, so the host provides it.** `effective.solve` offers the `sparsity` extension: a
+  `Sparsity` (the symmetric pattern in compressed rows, with coupled rows, bandwidth and a reverse Cuthill-McKee order)
+  read from the model's own index arrays, not from the values in `h`. It is static; the Newton `structure_hint` is the
+  per-call analogue. Operation counts for a dense, a coupled-rows and a banded factorization come from the same object.
 * **The cache belongs to the implementation.** The contract's `refactor` means "H changed"; an
   implementation also refactors worlds for which it holds no valid factor (first call, or a call it
   handed to the host).

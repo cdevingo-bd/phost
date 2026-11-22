@@ -1,7 +1,8 @@
-"""What a stage's dispatch does on MuJoCo Warp, written as data instead of a function.
+"""What a stage's dispatch does, written as data instead of a function. Host-neutral: a host supplies the few operations
+a table needs (``HookSupport``), and the same table machinery serves a GPU host and a simulator-free one.
 
 Every dispatch of a stage that wraps one host function does the same few things: pass on any call that is not for the
-host's own model, derive the contract's ports from the host's arrays (launching a kernel for those that need one), hand
+host's own model, derive the contract's ports from the host's arrays (running a kernel for those that need one), hand
 them to the runtime, and fold what it wrote back into the host's arrays. A ``Hook`` states those steps and ``make``
 turns it into the function the session installs, so a stage's binding is a table of where each port comes from.
 
@@ -9,11 +10,13 @@ A source says where a value comes from:
 
 * ``Data("qvel")``: an array of the host's data, read at every call (``d.qvel``)
 * ``Model("body_mass")``: an array of the model (``m.body_mass``)
-* ``Buf("force")``: a persistent buffer the host owns (``host.buffers().force``)
+* ``Buf("force")``: a persistent buffer the host owns (``support.buffers().force``)
 * ``Arg(2)``: an argument of the hooked call after ``(m, d)``
 * ``Dim("nv")``: a size of the model (``world``, ``nv``, ``nu``, ``nbody``)
 * ``Once(make)``: ``make(host, runtime)``, evaluated once when the dispatch is built
 * ``When("ext", source)``: the source if the implementation declared the extension ``ext``, else None
+
+A step is run around the runtime: ``Launch`` runs a named kernel of the host over a size, ``Zero`` clears an array.
 
 A function that does something a table cannot express (the Newton solve builds masks and a fallback closure) is still
 written by hand: ``StageBinding.make_dispatch`` takes any callable, ``Hook.make`` is one way to produce it.
@@ -21,8 +24,8 @@ written by hand: ``StageBinding.make_dispatch`` takes any callable, ``Hook.make`
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -61,9 +64,28 @@ class When:
     source: Any
 
 
+class HookSupport(Protocol):
+    """What a host provides so a ``Hook`` can run on it (returned by the host's ``hook_support()``)."""
+
+    def sizes(self) -> Mapping[str, int]:
+        """``world``, ``nv``, ``nu`` and ``nbody`` of this host's model and data."""
+
+    def check(self, d) -> None:
+        """Raise ``ValueError`` if ``d`` is not data this host was built for."""
+
+    def zero(self, array) -> None:
+        """Set every entry of one of the host's arrays to zero."""
+
+    def launch(self, kernel: str, dims: tuple, inputs: list, outputs: list) -> None:
+        """Run the host's kernel called ``kernel`` over ``dims``."""
+
+    def buffers(self) -> Any:
+        """An object whose attributes are the host's persistent buffers (``Buf("force")`` reads ``.force``)."""
+
+
 @dataclass(frozen=True)
 class Launch:
-    """Launch a kernel of ``phost.hosts._mjwarp_kernels`` over ``dim`` (sizes or ``Dim`` names)."""
+    """Run the host's kernel called ``kernel`` over ``dim`` (sizes or ``Dim`` names); the host resolves the name."""
 
     kernel: str
     dim: tuple
@@ -103,9 +125,8 @@ class Hook:
         """The ``make_dispatch`` of a ``StageBinding``; ``entry`` is the runtime method (the contract's ``entry``)."""
 
         def make_dispatch(original, runtime, host, allowed: frozenset):
-            wp, k, device = host._wp, host._k, host.device
-            sizes = dict(world=int(host.data.nworld), nv=int(host.model.nv), nu=int(host.model.nu),
-                         nbody=int(host.model.nbody))
+            support = host.hook_support()
+            sizes = dict(support.sizes())
 
             def bind(source) -> Callable:
                 """A function ``(m, d, args) -> value`` for a source; constants are resolved here, once."""
@@ -118,7 +139,7 @@ class Hook:
                 if isinstance(source, Arg):
                     return lambda m, d, args: args[source.index]
                 if isinstance(source, Buf):
-                    value = getattr(host.buffers(), source.name)
+                    value = getattr(support.buffers(), source.name)
                 elif isinstance(source, Dim):
                     value = sizes[source.name]
                 elif isinstance(source, Once):
@@ -136,13 +157,12 @@ class Hook:
                     def zero(m, d, args):
                         array = target(m, d, args)
                         if array is not None:
-                            array.zero_()
+                            support.zero(array)
                     return zero
-                kernel, dims = getattr(k, step.kernel), tuple(size(x) for x in step.dim)
+                dims = tuple(size(x) for x in step.dim)
                 ins, outs = [bind(x) for x in step.inputs], [bind(x) for x in step.outputs]
-                return lambda m, d, args: wp.launch(kernel, dim=dims, device=device,
-                                                    inputs=[f(m, d, args) for f in ins],
-                                                    outputs=[f(m, d, args) for f in outs])
+                return lambda m, d, args: support.launch(step.kernel, dims, [f(m, d, args) for f in ins],
+                                                         [f(m, d, args) for f in outs])
 
             prepare, finish = [compile_step(s) for s in self.prepare], [compile_step(s) for s in self.finish]
             ports = {name: bind(source) for name, source in self.ports.items()}
@@ -157,8 +177,7 @@ class Hook:
             def dispatch(m, d, *args, **kwargs):
                 if m is not host.model or (self.handles is not None and not self.handles(args, kwargs)):
                     return original(m, d, *args, **kwargs)
-                if d.nworld != sizes["world"] or d.qpos.device != device:
-                    raise ValueError("data world count or device mismatch")
+                support.check(d)
                 if self.when == "before":
                     run(m, d, args)
                     return original(m, d, *args, **kwargs)

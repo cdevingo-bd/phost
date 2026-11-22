@@ -92,6 +92,9 @@ class StageBinding:
     ``native_timing`` says how to time the host's own version of the stage (see ``NativeTiming``).
     ``oracle(host)`` is what a contract check calls after the host has run with an implementation installed: it measures what
     the host did with the stage's outputs, from the host's own data, and returns the ``effect`` the stage's judge reads.
+    ``sparsity(host)`` returns the nonzero pattern of the stage's system matrix (a ``phost.sparsity.Sparsity``), or None when
+    the host cannot say or the stage has no matrix. It is the same fact the ``sparsity`` extension hands an implementation,
+    available to a tool without installing anything.
     """
 
     contract: StageContract
@@ -101,6 +104,7 @@ class StageBinding:
     applicable: Callable[["Host"], str | None] | None = None
     native_timing: NativeTiming | None = None
     oracle: Callable[["Host"], Mapping[str, Any] | None] | None = None
+    sparsity: Callable[["Host"], Any] | None = None
 
 
 class Host(abc.ABC):
@@ -127,6 +131,11 @@ class Host(abc.ABC):
 
     def native(self) -> Any:
         raise CapabilityError(f"host {self.info.name!r} does not expose native objects")
+
+    def hook_support(self):
+        """What a ``phost.hook.Hook`` needs from this host (see ``HookSupport``). A host whose bindings are all hand-written
+        does not need to provide it."""
+        raise CapabilityError(f"host {self.info.name!r} does not support table-driven stage bindings")
 
     def meter(self) -> Meter:
         """A new counter of stage executions. A host that replays captured device work overrides this with a

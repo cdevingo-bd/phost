@@ -17,7 +17,7 @@ from typing import Any, Mapping, Protocol
 from ..impl import Impl, ImplKind
 from ..judge import Judge, StageSpec
 from ..registry import Registry
-from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
+from ..stage import CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
 from ._common import padded_entries
 
 NAME = "effective.solve"
@@ -60,6 +60,11 @@ CONTRACT = StageContract(
                   "gate shared with the host-side status bit. Above a condition number of about 1e4 no float32 "
                   "solver meets it; an implementation reports that in status instead of hiding it"),
     ),
+    extensions=(
+        Extension("sparsity",
+                  "A phost.sparsity.Sparsity: the nonzero pattern of M_hat, a fact about the host's model that holds for every "
+                  "call. It lets a solver factor only the coupled rows, or reorder to a narrow band, without scanning h."),
+    ),
     reference="effective.solve.float64",
     entry="solve",
 )
@@ -72,6 +77,7 @@ class EffectiveSystem:
     h: Any
     rhs: Any
     qacc: Any
+    sparsity: Any = None             # a phost.sparsity.Sparsity, when the implementation declared the extension
 
 
 class EffectiveSolver(Protocol):

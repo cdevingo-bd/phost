@@ -12,7 +12,7 @@ from ..host import NativeTiming, StageBinding
 from ..patch import original_of
 from ..stages import body_wrench as bw
 from . import mjwarp as adapter
-from ._dispatch import Data, Hook, Model
+from ..hook import Data, Hook, Model
 
 REVIEWED_XFRC = {"f8d20c77e72530e6f4f8e8fbbf52fdf20b274c44ced82fa1bf25c6a3c7c63387": adapter._BUILD}
 
