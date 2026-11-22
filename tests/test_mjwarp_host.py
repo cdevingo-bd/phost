@@ -147,3 +147,14 @@ def test_mjlab_wrapper_delegates_to_the_mjwarp_host():
     from phost import CapabilityError
     with pytest.raises(CapabilityError, match="MJLab"):
         adapter.MJLabHost(SimpleNamespace(wp_model=1))
+
+
+def test_facts_can_be_read_while_a_graph_is_being_captured():
+    """The dispatches ask the host for facts inside a capture, where a device-to-host copy raises. Facts must not read
+    the device once the host is built."""
+    host = make_host()
+    with wp.ScopedDevice("cuda:0"):
+        wp.synchronize()
+        with wp.ScopedCapture():
+            facts = host.facts()
+            assert facts.extra["scalar_dofs"] >= 0

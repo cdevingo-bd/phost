@@ -104,6 +104,7 @@ class MJWarpHost(Host):
         self.device = model.body_mass.device
         self._buffers: dict[str, Any] = {}
         self._stages: Mapping[str, StageBinding] | None = None
+        self._scalar = self._read_scalar_dofs()          # the only device read facts() needs; see _scalar_dofs
         self.info = HostInfo(name=name, version=_version(), build_id=None, patched=None)
 
     # -- Host ---------------------------------------------------------------------------------
@@ -148,7 +149,14 @@ class MJWarpHost(Host):
         return self._stages
 
     def _scalar_dofs(self):
-        """(scalar mask, qpos address) per DOF: scalar DOFs belong to hinge and slide joints."""
+        """(scalar mask, qpos address) per DOF: scalar DOFs belong to hinge and slide joints.
+
+        Joint topology does not change, so it is read from the device once, when the host is built. ``facts()`` uses
+        it, and the dispatches call ``facts()`` while a graph is being captured, where a device-to-host copy is an error.
+        """
+        return self._scalar
+
+    def _read_scalar_dofs(self):
         import numpy as np
         m, t = self.model, self._types
         jtype, qadr, dadr = m.jnt_type.numpy(), m.jnt_qposadr.numpy(), m.jnt_dofadr.numpy()
