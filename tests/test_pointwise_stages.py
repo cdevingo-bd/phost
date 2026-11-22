@@ -97,13 +97,13 @@ def test_probe_reports_without_changing_the_simulation(host, registry):
         host.drive(ps.NAME)
         metrics = session.metrics()[ps.NAME]
     assert np.array_equal(host.data.qacc, baseline[0]) and np.array_equal(host.data.qfrc_passive, baseline[1])
-    assert metrics["traces"] == 1 and metrics["last_max_qvel"] > 0
+    assert metrics["calls"] == 1 and metrics["last_max_qvel"] > 0
 
 
 def test_other_models_are_left_alone(host, registry):
     with Session(host, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=9.0))], registry) as session:
         host.drive(pf.NAME, owned=False)
-        assert session.metrics()[pf.NAME]["traces"] == 0
+        assert session.metrics()[pf.NAME]["calls"] == 0
 
 
 def test_applicability_is_checked(registry):

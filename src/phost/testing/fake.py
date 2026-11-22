@@ -7,6 +7,7 @@ phost (install rule, guards, session, contract checks) can be tested without a G
 from __future__ import annotations
 
 import copy
+import dataclasses
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -14,7 +15,7 @@ import numpy as np
 
 from ..errors import CapabilityError
 from ..guard import Guard, source_hash
-from ..host import Capability, Host, HostInfo, ModelFacts, StageBinding
+from ..host import Capability, Host, HostInfo, ModelFacts, Provision, StageBinding
 from ..patch import PatchPoint, Target, original_of
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
@@ -42,12 +43,19 @@ def _assemble(m, d, ctx):
 
 # The fake host's own physics for the pointwise stages. Simple on purpose, but wired like a real host:
 # forward() looks its steps up on ``ns`` at call time, so patching an entry changes what forward() does.
-DAMPING = 0.1                         # native passive damping on every DOF
+DAMPING = 0.1                         # native passive damping on every DOF (the model's dof_damping)
+TIMESTEP = 0.05
 GAIN, BIAS_LENGTH, BIAS_VELOCITY = 2.0, -0.5, -0.05   # native actuator: force = GAIN ctrl + bias terms
 
 
 def _native_passive(m, d):
-    d.qfrc_passive[:] = (-DAMPING * d.qvel).astype(np.float32)
+    d.qfrc_passive[:] = (-m.dof_damping * d.qvel).astype(np.float32)
+
+
+def _native_euler(m, d):
+    """Unit masses, semi-implicit in velocity: the model's joint damping is integrated implicitly, as MuJoCo's Euler does.
+    qacc is the explicit acceleration (passive damper force included), so v+ = v + h qacc / (1 + h c)."""
+    d.qvel[:] = (d.qvel + TIMESTEP * d.qacc / (1.0 + TIMESTEP * m.dof_damping)).astype(np.float32)
 
 
 def _native_actuation(m, d):
@@ -71,14 +79,15 @@ class FakeHost(Host):
     capabilities = Capability.PATCH | Capability.NATIVE
 
     def __init__(self, nv: int = 12, world_count: int = 4, nv_pad: int = 16, seed: int = 0, coupled: int = 4,
-                 nu: int = 3):
+                 nu: int = 3, damping: float = DAMPING):
         self.ns = SimpleNamespace(solve_hook=_native_solve, assemble=_assemble, passive=_native_passive,
-                                  fwd_actuation=_native_actuation)
+                                  fwd_actuation=_native_actuation, euler=_native_euler)
         self.ns.forward = lambda m, d: _native_forward(m, d, self.ns)
         scalar = np.ones(nv, np.int32)
         scalar[-3:] = 0                                  # the last DOFs stand in for a free joint
-        self.model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar)
-        self.other_model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar)
+        dof_damping = np.full(nv, damping, np.float32)
+        self.model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping)
+        self.other_model = SimpleNamespace(nv=nv, nq=nv, nv_pad=nv_pad, nu=nu, scalar=scalar, dof_damping=dof_damping)
         f32 = lambda *shape: np.zeros(shape, np.float32)
         self.data = SimpleNamespace(nworld=world_count, qpos=f32(world_count, nv), qvel=f32(world_count, nv),
                                     qacc=f32(world_count, nv), time=f32(world_count), ctrl=f32(world_count, nu),
@@ -89,7 +98,7 @@ class FakeHost(Host):
         self.coupled = coupled
         self._reviewed_hook = source_hash(self.ns.solve_hook)
         self._reviewed_assemble = source_hash(self.ns.assemble)
-        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward")}
+        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward", "euler")}
         self._stages = None
 
     # -- Host ---------------------------------------------------------------------------------
@@ -111,11 +120,13 @@ class FakeHost(Host):
                                   {self._reviewed_assemble: "fake build 1"}, "how H is assembled"),
             })
             self._stages = {nl.NAME: StageBinding(nl.CONTRACT, point, _make_dispatch,
-                                                  extensions={"structure_hint": "assembly", "fallback": None})}
+                                                  extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
             for contract, attribute, make in ((pf.CONTRACT, "passive", _passive_dispatch),
                                               (cl.CONTRACT, "fwd_actuation", _control_dispatch),
                                               (ps.CONTRACT, "forward", _probe_dispatch)):
                 self._stages[contract.name] = StageBinding(contract, self._point(contract.name, attribute), make)
+            self._stages[pf.NAME] = dataclasses.replace(self._stages[pf.NAME], extensions={
+                "implicit_damping": Provision(point=self._point(pf.NAME, "euler"), wrap=_euler_wrap)})
         return self._stages
 
     def _point(self, stage, attribute):
@@ -168,16 +179,28 @@ class FakeHost(Host):
                     nv=self.model.nv, active=act)
 
 
-    def _drive_forward(self, stage, *, owned, seed):
-        """Run one forward() on a random state, return what the host did with the stage's output."""
-        if stage not in (pf.NAME, cl.NAME, ps.NAME):
-            raise CapabilityError(f"fake host cannot drive {stage}")
-        rng, d, m = np.random.default_rng(seed), self.data, self.model
+    def _random_state(self, seed):
+        rng, d = np.random.default_rng(seed), self.data
         for name in ("qpos", "qvel", "ctrl"):
             getattr(d, name)[:] = rng.standard_normal(getattr(d, name).shape).astype(np.float32)
         d.time[:] = rng.uniform(0, 5, d.nworld).astype(np.float32)
         for name in ("qacc", "qfrc_passive", "actuator_force"):
             getattr(d, name)[:] = SENTINEL
+
+    def integrate(self, *, seed: int = 0, owned: bool = True):
+        """One forward() and one Euler step from a random state. Returns the velocity afterwards."""
+        self._random_state(seed)
+        model = self.model if owned else self.other_model
+        self.ns.forward(model, self.data)
+        self.ns.euler(model, self.data)
+        return self.data.qvel.copy()
+
+    def _drive_forward(self, stage, *, owned, seed):
+        """Run one forward() on a random state, return what the host did with the stage's output."""
+        if stage not in (pf.NAME, cl.NAME, ps.NAME):
+            raise CapabilityError(f"fake host cannot drive {stage}")
+        d, m = self.data, self.model
+        self._random_state(seed)
         baseline = copy.deepcopy(d)
         original_of(self.ns.passive)(m, baseline)
         self.ns.forward(m if owned else self.other_model, d)
@@ -223,6 +246,8 @@ def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
 
 
 def _passive_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
+    damping = host.buffer("damping", host.data.qvel.shape) if "implicit_damping" in allowed else None
+
     def dispatch(m, d):
         original(m, d)
         if m is not host.model:
@@ -230,8 +255,24 @@ def _passive_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
         scalar = m.scalar.astype(bool)
         q = np.where(scalar, d.qpos[:, :m.nv], 0.0).astype(np.float32)
         force = np.zeros_like(d.qvel)
-        runtime.apply(pf.DofForceSystem(q=q, v=d.qvel, time=d.time, scalar=m.scalar, force=force))
+        if damping is not None:
+            damping[:] = 0.0
+        runtime.apply(pf.DofForceSystem(q=q, v=d.qvel, time=d.time, scalar=m.scalar, force=force, damping=damping))
         d.qfrc_passive += np.where(scalar, force, 0.0).astype(np.float32)
+
+    return dispatch
+
+
+def _euler_wrap(original, host: FakeHost):
+    """Euler integrates the model's damping implicitly: give it the law's damping on top, for this call."""
+    damping = host.buffer("damping", host.data.qvel.shape)
+
+    def dispatch(m, d):
+        if m is not host.model:
+            return original(m, d)
+        seen = copy.copy(m)
+        seen.dof_damping = (m.dof_damping + damping).astype(np.float32)
+        original(seen, d)
 
     return dispatch
 

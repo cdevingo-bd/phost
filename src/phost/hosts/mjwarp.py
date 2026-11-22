@@ -20,7 +20,7 @@ from typing import Any, Mapping
 
 from ..errors import CapabilityError
 from ..guard import Guard, source_hash
-from ..host import Capability, Host, HostInfo, ModelFacts, StageBinding
+from ..host import Capability, Host, HostInfo, ModelFacts, Provision, StageBinding
 from ..patch import PatchPoint, Target
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
@@ -44,6 +44,11 @@ _BUILD = "mujoco_warp 3.17.0 source build (f34c6dd5 + local patches)"
 REVIEWED_PASSIVE = {"908ad56584892abc221c6b98b47ea20e3582aa71fc0515aeb1e925101f5e2ba5": _BUILD}
 REVIEWED_ACTUATION = {"8c0bf41d54b65408e230e0d0500ea35a17b5477987f9e2e3a40af63024e71271": _BUILD}
 REVIEWED_FORWARD = {"24421d5832eceecadd616dce6424b9db38efc7af5b7e80e3a645814d9ebc1db7": _BUILD}
+# forward.euler, with the two kernels it launches for its implicit damping: euler reads m.dof_damping and
+# m.dof_dampingpoly through _compute_damping_deriv (linear + 2 p0 |v| + 3 p1 v^2, so adding to the linear term adds
+# to the derivative) and _euler_damp_qfrc adds timestep * that to the diagonal of the mass matrix it solves with.
+REVIEWED_EULER = {"7023bc7c8027667766292b6038e3e43cd446169a28edebc050ca0200ee7f06cc": _BUILD}
+_EULER = ("euler", "_compute_damping_deriv", "_euler_damp_qfrc")
 # Functions that assemble the Newton Hessian. The structure hint depends on how they build H.
 _ASSEMBLY = ("_update_gradient", "_update_gradient_incremental", "_JTDACJ_sparse",
              "_update_gradient_h_incremental_sparse", "_update_gradient_init_h_sparse")
@@ -116,6 +121,9 @@ class MJWarpHost(Host):
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, cpu_model=self.cpu_model, solver=_solver_module())
 
+    def meter(self):
+        return self._k.DeviceMeter(self.device)
+
     def stages(self) -> Mapping[str, StageBinding]:
         if self._stages is None:
             solver = _solver_module()
@@ -127,13 +135,16 @@ class MJWarpHost(Host):
                 "assembly": Guard("assembly", _read_assembly, REVIEWED_ASSEMBLIES, "how MJWarp assembles H"),
             })
             self._stages = {nl.NAME: StageBinding(
-                nl.CONTRACT, point, _make_dispatch, extensions={"structure_hint": "assembly", "fallback": None})}
+                nl.CONTRACT, point, _make_dispatch,
+                extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
             passive, forward = _passive_module(), _forward_module()
             for contract, module, attribute, reviewed, make in (
                     (pf.CONTRACT, passive, "passive", REVIEWED_PASSIVE, _make_passive_dispatch),
                     (cl.CONTRACT, forward, "fwd_actuation", REVIEWED_ACTUATION, _make_control_dispatch),
                     (ps.CONTRACT, forward, "forward", REVIEWED_FORWARD, _make_probe_dispatch)):
                 self._stages[contract.name] = StageBinding(contract, _point(contract.name, module, attribute, reviewed), make)
+            self._stages[pf.NAME] = dataclasses.replace(self._stages[pf.NAME], extensions={"implicit_damping": Provision(
+                point=_point(pf.NAME, forward, "euler", REVIEWED_EULER, also=_EULER[1:]), wrap=_wrap_euler)})
         return self._stages
 
     def _scalar_dofs(self):
@@ -160,6 +171,8 @@ class MJWarpHost(Host):
                 dof_qposadr=wp.array(address, dtype=wp.int32, device=self.device),
                 q=wp.zeros((n, nv), dtype=wp.float32, device=self.device),
                 force=wp.zeros((n, nv), dtype=wp.float32, device=self.device),
+                damping=wp.zeros((n, nv), dtype=wp.float32, device=self.device),
+                effective_damping=wp.zeros((n, nv), dtype=wp.float32, device=self.device),
                 active=wp.zeros(n, dtype=wp.int32, device=self.device),
                 refactor=wp.zeros(n, dtype=wp.int32, device=self.device),
                 shadow_done=wp.ones(n, dtype=wp.bool, device=self.device),
@@ -176,11 +189,14 @@ class MJWarpHost(Host):
         return self._buffers[key]
 
 
-def _point(stage, module, attribute, reviewed) -> PatchPoint:
+def _point(stage, module, attribute, reviewed, also=()) -> PatchPoint:
+    """A function to wrap. ``also`` names further functions or kernels of the module the guard hashes with it, for
+    behaviour of the wrapped function that lives in what it calls."""
     target = Target(f"{module.__name__}.{attribute}", lambda: getattr(module, attribute),
                     lambda f: setattr(module, attribute, f))
     return PatchPoint(stage, target, {"target": Guard(
-        "target", lambda: source_hash(getattr(module, attribute)), reviewed, f"{attribute}, the function being wrapped")})
+        "target", lambda: source_hash(*[getattr(module, name) for name in (attribute, *also)]), reviewed,
+        f"{attribute}, the function being wrapped" + (f", with {', '.join(also)}" if also else ""))})
 
 
 def _version() -> str:
@@ -255,6 +271,8 @@ def _make_passive_dispatch(original, runtime, host: MJWarpHost, allowed: frozens
     wp, k = host._wp, host._k
     bufs, nworld, nv, device = host.buffers(), int(host.data.nworld), int(host.model.nv), host.device
 
+    damping = bufs.damping if "implicit_damping" in allowed else None
+
     def dispatch(m, d):
         original(m, d)
         if m is not host.model:
@@ -262,9 +280,32 @@ def _make_passive_dispatch(original, runtime, host: MJWarpHost, allowed: frozens
         _check_same_model(host, d)
         wp.launch(k.gather_scalar_q, dim=(nworld, nv), inputs=[d.qpos, bufs.dof_qposadr], outputs=[bufs.q], device=device)
         bufs.force.zero_()
-        runtime.apply(pf.DofForceSystem(q=bufs.q, v=d.qvel, time=d.time, scalar=bufs.scalar, force=bufs.force))
+        if damping is not None:
+            damping.zero_()
+        runtime.apply(pf.DofForceSystem(q=bufs.q, v=d.qvel, time=d.time, scalar=bufs.scalar, force=bufs.force,
+                                        damping=damping))
         wp.launch(k.add_scalar_force, dim=(nworld, nv), inputs=[bufs.scalar, bufs.force], outputs=[d.qfrc_passive],
                   device=device)
+
+    return dispatch
+
+
+def _wrap_euler(original, host: MJWarpHost):
+    """Euler integrates the model's joint damping implicitly. Give it the damping the law reported on top of the
+    model's own, for this call, by handing it a copy of the model whose ``dof_damping`` is the sum. The user's model is
+    not touched. The passive force of the law is already in qfrc_passive, so the force and its implicit term agree."""
+    wp, k = host._wp, host._k
+    bufs, nworld, nv, device = host.buffers(), int(host.data.nworld), int(host.model.nv), host.device
+
+    def dispatch(m, d):
+        if m is not host.model:
+            return original(m, d)
+        _check_same_model(host, d)
+        wp.launch(k.fold_damping, dim=(nworld, nv), inputs=[m.dof_damping, bufs.damping],
+                  outputs=[bufs.effective_damping], device=device)
+        seen = copy.copy(m)
+        seen.dof_damping = bufs.effective_damping
+        original(seen, d)
 
     return dispatch
 

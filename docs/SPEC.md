@@ -59,6 +59,16 @@ warmup and capture, not replay. Keep the host and session alive while replaying 
 * **A hint is exact only for Hessians the host assembled.** A synthetic H has no relation to the
   host's Jacobian, so the hint misses its coupling. The contract check therefore has a `step` mode
   that captures real hook calls during a real `mjw.step`.
+* **The host counts executions, not the implementation.** An implementation's Python runs once per eager call and per
+  capture, never per replay, and could report anything. A contract names its `entry` method, the session wraps it, and
+  the host's `Meter` ticks at every execution; on a device host the increment is device work, so it repeats on replay.
+  Measured cost: under 1% on the smallest scene (0.17 ms per step), unmeasurable at nv=330.
+* **An extension can need a second host function.** `StageBinding.extensions` maps a name to a `Provision`: the guard
+  that must pass and, when the host must also change what it does elsewhere, a second patch point and its wrapper,
+  installed, guarded and restored with the stage. `dof.passive_force`'s `implicit_damping` is one: the law reports
+  `damping` (its -d force / d v) and the host's Euler step integrates it implicitly, like the model's own. An
+  implementation lists extensions it needs in `extensions_used` (refused if the host lacks one) and extensions it
+  merely likes in `extensions_optional` (a missing or unreviewed one is recorded as an advisory and the law runs without).
 * **The cache belongs to the implementation.** The contract's `refactor` means "H changed"; an
   implementation also refactors worlds for which it holds no valid factor (first call, or a call it
   handed to the host).
@@ -72,8 +82,9 @@ warmup and capture, not replay. Keep the host and session alive while replaying 
 ## Reviewed hosts
 
 Only one build is reviewed: MuJoCo Warp 3.17.0 source build (f34c6dd5 plus local patches), for both
-the Newton hook, the Hessian assembly, and the three functions the pointwise stages wrap
-(`passive.passive`, `forward.fwd_actuation`, `forward.forward`). Any other build is refused with its hash in the
+the Newton hook, the Hessian assembly, the three functions the pointwise stages wrap
+(`passive.passive`, `forward.fwd_actuation`, `forward.forward`) and `forward.euler` with the two kernels it launches for
+its implicit damping. Any other build is refused with its hash in the
 message (mujoco_warp 4.0.1 is refused today). Supporting another build means reviewing those functions on it
 first, then adding the hashes.
 The MJLab adapter wraps `sim.wp_model`, `sim.wp_data`, `sim.mj_model`; it has been tested against a

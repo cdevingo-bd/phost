@@ -49,3 +49,21 @@ def test_each_stage_is_installed_on_a_reviewed_build_and_refused_otherwise():
             with pytest.raises(GuardError, match="unreviewed source sha256"):
                 Session(host, [selection()], registry).__enter__()
         assert (passive.passive, forward.fwd_actuation, forward.forward) == before     # nothing left installed
+
+
+def test_an_unreviewed_euler_degrades_implicit_damping_to_explicit_and_says_why(monkeypatch):
+    """The law's own stage is installed, but Euler is left alone and the session records why: the damping stays explicit."""
+    from phost.hosts import mjwarp as adapter
+    from mujoco_warp._src import forward
+    monkeypatch.setattr(adapter, "REVIEWED_EULER", {})            # as if this build's euler were not reviewed
+    cm = mujoco.MjModel.from_xml_string(XML)
+    cd = mujoco.MjData(cm)
+    with wp.ScopedDevice("cuda:0"):
+        host = DrivableMJWarpHost(mjw.put_model(cm), mjw.put_data(cm, cd, nworld=1), cpu_model=cm)
+    registry = Registry(); register_all(registry); register_builtin(registry)
+    euler = forward.euler
+    with Session(host, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(c=0.5))], registry) as session:
+        assert forward.euler is euler
+        assert any("running without extension 'implicit_damping'" in note and "unreviewed source sha256" in note
+                   for note in session.advisories), session.advisories
+    assert forward.euler is euler

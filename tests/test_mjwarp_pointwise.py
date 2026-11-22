@@ -100,16 +100,17 @@ def test_builtin_implementations_pass_the_contract_on_the_real_host(host, regist
 def test_other_models_are_left_alone(host, registry):
     with Session(host, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=9.0))], registry) as session:
         host.drive(pf.NAME, owned=False)
-        assert session.metrics()[pf.NAME]["traces"] == 0
+        assert session.metrics()[pf.NAME]["calls"] == 0
 
 
 def test_scope_restores_every_function(host, registry):
     from mujoco_warp._src import forward, passive
-    before = (passive.passive, forward.fwd_actuation, forward.forward)
+    before = (passive.passive, forward.fwd_actuation, forward.forward, forward.euler)
     with Session(host, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=1.0)), Selection(cl.NAME, controllers.PD_ID),
                         Selection(ps.NAME, probes.PEAK_ID)], registry):
         assert passive.passive is not before[0] and forward.forward is not before[2]
-    assert (passive.passive, forward.fwd_actuation, forward.forward) == before
+        assert forward.euler is not before[3]                  # the spring-damper asks for implicit damping
+    assert (passive.passive, forward.fwd_actuation, forward.forward, forward.euler) == before
 
 
 def run_gpu(nsteps, selections=(), registry=None, nworld=2, graph=False, **xml):
@@ -154,6 +155,7 @@ def cpu_truth(k, c, native_damper, steps=150):
 
 
 SCALAR = [7, 8, 9]                                               # h1, h2, s1 in qpos (the free joint holds 0..6)
+SCALAR_DOFS = [6, 7, 8]                                          # the same joints in qvel (the free joint holds 0..5)
 
 
 def err(a, b):
@@ -173,22 +175,56 @@ def test_spring_law_matches_mujoco_springs():
     assert err(run_gpu(150), truth) > 100 * max(err(staged, truth), 1e-6)
 
 
-def test_damping_law_matches_an_explicit_damper():
-    """The stage applies its force explicitly, so the truth is MuJoCo with the damper applied explicitly."""
+def test_damping_law_matches_the_models_own_damper():
+    """The law reports its damping, so Euler integrates it implicitly like the model's own damper: it must land as close
+    to MuJoCo (C) as MJWarp's native damper does (the control), where the explicit law was 1e-4 or more away."""
     k, c = 6.0, 0.15
     registry = Registry(); register_all(registry); register_builtin(registry)
-    explicit = cpu_truth(k, c, native_damper=False)
+    truth = cpu_truth(k, c, native_damper=True)
     staged = run_gpu(150, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=k, c=c))], registry)
-    assert err(staged, explicit) < 1e-5
+    joint = f'stiffness="{k}" damping="{c}"'
+    control = run_gpu(150, spring1=joint, spring2=joint, spring3=joint)       # same spring and damper in the model
+    assert err(staged, truth) <= 3 * err(control, truth) + 1e-6, (err(staged, truth), err(control, truth))
+    assert err(staged, truth) < 2e-5
 
 
-def test_native_implicit_damping_differs_from_the_explicit_law_by_a_small_documented_amount():
-    """Records the semantic difference the stage's documentation states (O(timestep), about 0.1% of displacement here)."""
+def test_explicit_application_matches_an_explicit_damper_and_differs_from_the_model_damper():
+    """implicit=False applies the damper as a plain force. The truth is then MuJoCo with the damper applied explicitly,
+    and the O(timestep) distance to the model's implicit damper is what the contract documents."""
     k, c = 6.0, 0.15
     registry = Registry(); register_all(registry); register_builtin(registry)
-    staged = run_gpu(150, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=k, c=c))], registry)
+    staged = run_gpu(150, [Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(k=k, c=c, implicit=False))], registry)
+    assert err(staged, cpu_truth(k, c, native_damper=False)) < 1e-5
     gap = err(staged, cpu_truth(k, c, native_damper=True))
     assert 1e-4 < gap < 1e-2, gap
+
+
+def one_euler_step(selections, registry, **xml):
+    """Qvel of the scalar DOFs after one MJWarp step from a fixed state with nonzero velocities."""
+    host = make_host(1, **xml)[0]
+    host.data.qvel.assign(np.linspace(0.5, 1.5, int(host.model.nv), dtype=np.float32)[None, :])
+    with wp.ScopedDevice("cuda:0"):
+        if selections:
+            with Session(host, selections, registry):
+                mjw.step(host.model, host.data)
+        else:
+            mjw.step(host.model, host.data)
+        wp.synchronize()
+    return host.data.qvel.numpy()[0, SCALAR_DOFS].astype(np.float64)
+
+
+def test_reported_damping_is_taken_by_euler_for_the_step_it_was_computed_in():
+    """With no joint damping in the model, the law's damping c must give one Euler step exactly the (M + h c)^-1 step
+    MJWarp takes for a model damper of c."""
+    c = 0.9
+    registry = Registry(); register_all(registry); register_builtin(registry)
+    joint = f'damping="{c}"'
+    want = one_euler_step([], registry, spring1=joint, spring2=joint, spring3=joint)
+    got = one_euler_step([Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(c=c))], registry)
+    assert np.allclose(got, want, rtol=2e-5, atol=1e-6), np.abs(got - want).max()
+    explicit = one_euler_step([Selection(pf.NAME, forces.SPRING_DAMPER_ID, dict(c=c, implicit=False))], registry)
+    assert np.abs(explicit - want).max() > 1e-4                                  # the explicit step really is different
+    assert np.abs(got - one_euler_step([], registry)).max() > 1e-4                # and the law changed something
 
 
 def test_controller_matches_a_mujoco_pd_loop():
@@ -222,17 +258,40 @@ def test_captured_graph_replays_the_installed_stages():
     assert np.abs(eager - replayed).max() < 1e-5
 
 
-def test_traces_count_python_runs_not_graph_replays():
-    """Under a captured graph the runtime runs in Python at warmup and capture only; ``traces`` says so."""
+def test_calls_count_every_replay_of_a_captured_graph():
+    """The host counts executions on the device, so a replayed graph counts every time (its Python never reruns)."""
     host, cm, cd = make_host(2)
     registry = Registry(); register_all(registry); register_builtin(registry)
     with wp.ScopedDevice("cuda:0"), Session(host, [Selection(ps.NAME, probes.PEAK_ID)], registry) as session:
-        mjw.step(host.model, host.data)                              # warmup: one run in Python
+        mjw.step(host.model, host.data)                              # warmup: executes once
         with wp.ScopedCapture() as cap:
-            mjw.step(host.model, host.data)                          # capture: one more
+            mjw.step(host.model, host.data)                          # capture records the work and does not execute it
         for _ in range(25):
             wp.capture_launch(cap.graph)
         wp.synchronize()
+        assert session.metrics()[ps.NAME]["calls"] == 1 + 25
+        session.reset_metrics()
+        for _ in range(7):
+            wp.capture_launch(cap.graph)
+        wp.synchronize()
         metrics = session.metrics()[ps.NAME]
-    assert metrics["traces"] == 2
-    assert metrics["last_max_qvel"] > 0                               # but the device buffer is live after replays
+    assert metrics["calls"] == 7
+    assert metrics["last_max_qvel"] > 0                               # the device buffer is live after replays
+
+
+def test_calls_follow_the_integrator_not_the_step_count():
+    """RK4 evaluates forward dynamics four times a step, and the stage runs each time: the count says so."""
+    xml = XML.replace('integrator="Euler"', 'integrator="RK4"').format(**PLAIN)
+    cm = mujoco.MjModel.from_xml_string(xml)
+    cd = mujoco.MjData(cm)
+    mujoco.mj_forward(cm, cd)
+    with wp.ScopedDevice("cuda:0"):
+        model = mjw.put_model(cm)
+        data = mjw.put_data(cm, cd, nworld=2, nconmax=32, njmax=128)
+    host = DrivableMJWarpHost(model, data, cpu_model=cm, cpu_data=cd)
+    registry = Registry(); register_all(registry); register_builtin(registry)
+    with wp.ScopedDevice("cuda:0"), Session(host, [Selection(ps.NAME, probes.PEAK_ID)], registry) as session:
+        for _ in range(5):
+            mjw.step(model, data)
+        wp.synchronize()
+        assert session.metrics()[ps.NAME]["calls"] == 5 * 4

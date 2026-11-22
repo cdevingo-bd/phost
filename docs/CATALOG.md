@@ -25,15 +25,22 @@ implementation against it; the same check gates a leaderboard entry.
 ## What `check_impl` verifies for the three non-solver stages
 
 Inputs unchanged; outputs finite; the same inputs give bitwise the same outputs; the law matches its float64 reference
-(`max_law_error` <= 1e-5); the host-side effect matches (`max_effect_error`); the runtime was called. Faults are
-tested: a wrong law, forgetting the scalar-DOF mask, writing an input, nondeterminism, NaN, an adapter that drops the
-effect, a probe that meddles with state.
+(`max_law_error` <= 1e-5); the host-side effect matches (`max_effect_error`); the runtime was called. For
+`dof.passive_force` that reports `damping`, each entry is 0 or the law's own -d force / d v, checked by central
+differences of the float64 reference one DOF at a time (`max_damping_error` <= 1e-4). Faults are tested: a wrong law,
+forgetting the scalar-DOF mask, writing an input, nondeterminism, NaN, an adapter that drops the effect, a probe that
+meddles with state, damping that is not the law's derivative.
+
+Every stage also gets `calls` from the host, not from the implementation: executions of the stage, counted on the
+device, so every replay of a captured graph counts (RK4 runs forward dynamics, and so the stage, four times a step).
 
 ## Ground truth against MuJoCo (C), MJWarp host
 
 * A spring law matches MuJoCo's own joint spring as closely as MJWarp's native spring does.
-* A damping law matches MuJoCo with the same damper applied explicitly to 1e-7; it differs from the model's implicit
-  damping by about 0.1% (see `MJWARP_STEP.md`).
+* A damping law that reports its damping (the default) matches MuJoCo's own joint damper to 1.6e-7, where MJWarp's native
+  damper is 1.9e-7 away: the host integrates it implicitly, as it does the model's damping. With `implicit=False` the
+  law is applied as a plain force; it matches MuJoCo with the damper applied explicitly to 1e-7 and is 3.4e-4 from the
+  model's implicit damper over 150 steps at 2 ms (see `MJWARP_STEP.md`).
 * A PD controller matches a MuJoCo loop that sets `ctrl` the same way.
 * A probe leaves the trajectory bitwise unchanged; a captured graph replays all three stages.
 

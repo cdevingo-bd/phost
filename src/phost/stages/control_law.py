@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from ..registry import Registry
-from ..stage import MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
+from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
 from ._common import native_impl as _native, relative_error
 
 NAME = "control.law"
@@ -42,13 +42,14 @@ CONTRACT = StageContract(
                    "max |ctrl - reference ctrl| / max |reference ctrl|, reference in float64 from the implementation"),
         MetricSpec("max_effect_error", "1", "lower", "gauge",
                    "relative error of the host's actuator force against its gain/bias applied to ctrl (float64)"),
-        MetricSpec("traces", "count", "none", "counter", "times the runtime ran in Python: once per eager call, once per warmup or graph capture, not once per replay"),
+        CALLS,
     ),
     tolerances=(
         Tolerance("max_law_error", 1e-5, "float32 evaluation of a float64 law"),
         Tolerance("max_effect_error", 1e-4, "the host used the command it was given"),
     ),
     reference="impl",
+    entry="apply",
 )
 
 
@@ -74,7 +75,7 @@ def register(registry: Registry) -> None:
     registry.add_impl(native_impl())
 
 
-def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None) -> dict:
+def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, law=None) -> dict:
     out = dict(max_law_error=relative_error(call["outputs"]["ctrl"], reference["ctrl"]))
     if effect is not None:
         out["max_effect_error"] = relative_error(effect["actuator_force"], effect["expected_actuator_force"])

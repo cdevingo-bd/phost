@@ -20,17 +20,16 @@ def _reference(inputs: Mapping[str, Any], params: Mapping[str, Any]) -> dict:
 
 class _Numpy:
     def __init__(self, params):
-        self.p, self.calls = params, 0
+        self.p = params
 
     def apply(self, system):
         import numpy as np
         p = self.p
         law = p["kp"] * (p["target"] - system.length.astype(np.float64)) - p["kd"] * system.velocity.astype(np.float64)
         system.ctrl[:] = law.astype(system.ctrl.dtype)
-        self.calls += 1
 
     def metrics(self):
-        return dict(traces=self.calls)
+        return {}
 
 
 class _Warp(_Numpy):
@@ -40,12 +39,12 @@ class _Warp(_Numpy):
         p = self.p
         wp.launch(_warp.pd, dim=system.ctrl.shape, inputs=[system.length, system.velocity, p["kp"], p["kd"], p["target"]],
                   outputs=[system.ctrl], device=system.ctrl.device)
-        self.calls += 1
 
 
 def _advisory(facts):
     if facts.integrator in ("implicit", "implicitfast"):
-        return f"{what} is not part of the implicit integrator's velocity Jacobian; a stiff law may need a smaller timestep"
+        return ("the law is not part of the implicit integrator's velocity Jacobian, so a stiff velocity-dependent law "
+                "may need a smaller timestep")
     return None
 
 

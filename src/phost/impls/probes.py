@@ -22,7 +22,6 @@ class _Numpy:
     width = 3
 
     def __init__(self, params):
-        self.calls = 0
         self._last = None
 
     def observe(self, system):
@@ -31,11 +30,10 @@ class _Numpy:
         system.value[:] = np.stack([np.abs(v).max(axis=1), np.abs(a).max(axis=1), np.sqrt((v * v).sum(axis=1))],
                                    axis=1).astype(system.value.dtype)
         self._last = system.value
-        self.calls += 1
 
     def metrics(self):
         import numpy as np
-        out: dict = dict(traces=self.calls)
+        out: dict = {}
         if self._last is not None:
             last = self._last.numpy() if hasattr(self._last, "numpy") else np.asarray(self._last)
             out["last_max_qvel"], out["last_max_qacc"] = float(last[:, 0].max()), float(last[:, 1].max())
@@ -49,7 +47,6 @@ class _Warp(_Numpy):
         wp.launch(_warp.peak, dim=system.value.shape[0], inputs=[system.qvel, system.qacc], outputs=[system.value],
                   device=system.value.device)
         self._last = system.value
-        self.calls += 1
 
 
 def _factory(host, params):

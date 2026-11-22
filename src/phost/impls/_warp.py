@@ -14,6 +14,18 @@ def spring_damper(q: wp.array2d[float], v: wp.array2d[float], scalar: wp.array[i
 
 
 @wp.kernel
+def spring_damper_implicit(q: wp.array2d[float], v: wp.array2d[float], scalar: wp.array[int], k: float, c: float,
+                           q_ref: float, force: wp.array2d[float], damping: wp.array2d[float]):
+    w, i = wp.tid()
+    if scalar[i] == 1:
+        force[w, i] = -k * (q[w, i] - q_ref) - c * v[w, i]
+        damping[w, i] = c
+    else:
+        force[w, i] = 0.0
+        damping[w, i] = 0.0
+
+
+@wp.kernel
 def pd(length: wp.array2d[float], velocity: wp.array2d[float], kp: float, kd: float, target: float,
        ctrl: wp.array2d[float]):
     w, i = wp.tid()

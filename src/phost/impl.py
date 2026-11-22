@@ -70,7 +70,8 @@ class Impl:
     params: tuple[ParamSpec, ...] = ()
     fit: str = ""                                   # prose: where it helps, where it does not
     metrics: tuple[MetricSpec, ...] = ()            # metrics beyond the stage contract's own
-    extensions_used: tuple[str, ...] = ()           # optional host callables it relies on
+    extensions_used: tuple[str, ...] = ()           # host extensions it needs: the host must offer them
+    extensions_optional: tuple[str, ...] = ()       # host extensions it uses when the host offers them (and they pass)
     applicable: Callable[[ModelFacts], str | None] | None = None   # returns a reason if NOT applicable
     advisory: Callable[[ModelFacts], str | None] | None = None     # returns a warning; the impl still runs
     factory: Callable[[Host, Mapping[str, Any]], StageRuntime] | None = None
@@ -117,4 +118,5 @@ class Impl:
             params=[dict(name=p.name, type=p.type, default=p.default, doc=p.doc, min=p.min, max=p.max,
                          choices=list(p.choices)) for p in self.params],
             metrics=[vars(m).copy() for m in self.metrics], extensions_used=list(self.extensions_used),
+            extensions_optional=list(self.extensions_optional),
             has_reference=self.reference is not None, provenance=dict(self.provenance))

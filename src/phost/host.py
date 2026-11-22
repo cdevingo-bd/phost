@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from .errors import CapabilityError
+from .meter import Meter, PythonMeter
 from .patch import PatchPoint
 from .stage import StageContract
 
@@ -42,6 +43,26 @@ class ModelFacts:
 
 
 @dataclass(frozen=True)
+class Provision:
+    """How a host supplies one extension named in a stage contract.
+
+    ``guard`` names a guard of the stage's patch point that must pass when an implementation uses the extension.
+    Some extensions need more than a value handed to the runtime: the host must also change what it does at a
+    second function (for example integrate a quantity the runtime reports). ``point`` is that function and
+    ``wrap(original, host)`` builds what is installed there; it is installed, guarded and restored with the stage,
+    and only when an implementation uses the extension.
+    """
+
+    guard: str | None = None
+    point: PatchPoint | None = None
+    wrap: Callable[[Callable, "Host"], Callable] | None = None
+
+    def __post_init__(self):
+        if (self.point is None) != (self.wrap is None):
+            raise ValueError("a provision's point and wrap go together")
+
+
+@dataclass(frozen=True)
 class StageBinding:
     """How one host implements one stage contract.
 
@@ -49,14 +70,13 @@ class StageBinding:
     it translates the host's native call into the contract's ports, hands them to ``runtime``, and
     forwards every call that is not the host's owned model to ``original``. ``allowed`` is the set
     of extension names the implementation declared; the dispatch supplies only those.
-    ``extensions`` lists the extensions this host can supply, each with the name of the guard that
-    must pass when an implementation relies on it (None if it needs none).
+    ``extensions`` lists the extensions this host can supply, by name, each as a ``Provision``.
     """
 
     contract: StageContract
     point: PatchPoint
     make_dispatch: Callable[[Callable, Any, "Host", frozenset], Callable]
-    extensions: Mapping[str, str | None] = field(default_factory=dict)
+    extensions: Mapping[str, Provision] = field(default_factory=dict)
 
 
 class Host(abc.ABC):
@@ -78,3 +98,8 @@ class Host(abc.ABC):
 
     def native(self) -> Any:
         raise CapabilityError(f"host {self.info.name!r} does not expose native objects")
+
+    def meter(self) -> Meter:
+        """A new counter of stage executions. A host that replays captured device work overrides this with a
+        meter whose increment is device work too, so that every replay counts."""
+        return PythonMeter()

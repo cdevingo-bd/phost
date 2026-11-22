@@ -11,11 +11,10 @@ class ReferenceRuntime:
     """Solves in float64 with numpy. Correct by construction."""
 
     def __init__(self, host, params):
-        self.host, self.calls = host, 0
+        self.host = host
 
     def solve(self, s: nl.NewtonSystem) -> None:
         nv = self.host.model.nv
-        self.calls += 1
         for w in range(s.h.shape[0]):
             if not s.active[w]:
                 continue
@@ -26,7 +25,7 @@ class ReferenceRuntime:
             s.newton_decrement[w] = np.float32(g @ x)
 
     def metrics(self):
-        return {"status": 0, "fallbacks": 0, "calls": self.calls}
+        return {"status": 0, "fallbacks": 0}
 
 
 class WrongRuntime(ReferenceRuntime):

@@ -11,9 +11,12 @@ from .errors import GuardError
 
 
 def source_hash(*objects) -> str:
-    """SHA-256 of the concatenated source text of functions or classes."""
+    """SHA-256 of the concatenated source text of functions or classes.
+
+    An object that keeps its Python function in ``.func`` (a Warp kernel does) is hashed by that function.
+    """
     try:
-        text = "".join(inspect.getsource(obj) for obj in objects)
+        text = "".join(inspect.getsource(getattr(obj, "func", obj)) for obj in objects)
     except (OSError, TypeError) as error:
         raise GuardError(f"cannot read source to verify it: {error}") from error
     return hashlib.sha256(text.encode()).hexdigest()

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from ..registry import Registry
-from ..stage import MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
+from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
 from ._common import native_impl as _native, relative_error
 
 NAME = "probe.state"
@@ -43,10 +43,11 @@ CONTRACT = StageContract(
     metrics=(
         MetricSpec("max_law_error", "1", "lower", "gauge",
                    "max |value - reference value| / max |reference value|, reference in float64 from the implementation"),
-        MetricSpec("traces", "count", "none", "counter", "times the runtime ran in Python: once per eager call, once per warmup or graph capture, not once per replay"),
+        CALLS,
     ),
     tolerances=(Tolerance("max_law_error", 1e-5, "float32 evaluation of a float64 definition"),),
     reference="impl",
+    entry="observe",
 )
 
 
@@ -75,5 +76,5 @@ def register(registry: Registry) -> None:
     registry.add_impl(native_impl())
 
 
-def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None) -> dict:
+def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, law=None) -> dict:
     return dict(max_law_error=relative_error(call["outputs"]["value"], reference["value"]))

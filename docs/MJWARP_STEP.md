@@ -47,7 +47,7 @@ by `step`. Anything inside a kernel (a `wp.func` such as `_efc_row`) is not atta
 | `solver._linesearch` | private; inputs are per-row quadratic coefficients with branches for friction loss and elliptic cones | not built: the float64 reference must cover those branches; candidate approximate stage |
 | constraint softness (`_efc_row`, `_contact_kbimp`) | `wp.func` inlined in per-constraint kernels | not attachable; would need a post-pass over `efc.D`, `efc.aref` and per-row `solref`/`solimp` lookup |
 | `collision_driver.collision` | function | attachable, but the contract is a contact list; not built |
-| `forward.euler`, `_advance` | per-integrator functions | attachable; Euler integrates joint damping implicitly (below) |
+| `forward.euler`, `_advance` | per-integrator functions | **built**: wrapped as `dof.passive_force`'s `implicit_damping` extension (Euler only); other integrators not built |
 
 ## Things that bit, or will
 
@@ -56,9 +56,14 @@ by `step`. Anything inside a kernel (a `wp.func` such as `_efc_row`) is not atta
 * `passive.passive` rebuilds `d.qfrc_passive` from scratch on every call (and zeroes it when springs and dampers are
   both disabled). A force added afterwards is seen by `fwd_acceleration`. `qfrc_spring` and `qfrc_damper`, which sensors
   read, do not contain it.
-* Euler integrates `dof_damping` implicitly. A damping law written into `dof.passive_force` is explicit, and differs
-  from the same damping in the model by O(timestep): 0.1% of displacement over 150 steps at 2 ms with c/m = 0.75
-  (`tests/test_mjwarp_pointwise.py`). Springs match the model's own to float32 rounding.
+* Euler integrates `dof_damping` implicitly: `_compute_damping_deriv` reads `m.dof_damping` and `m.dof_dampingpoly`
+  (derivative `linear + 2 p0 |v| + 3 p1 v^2`) and `_euler_damp_qfrc` adds `timestep` times it to the diagonal of the
+  mass matrix it solves with. A force added to `qfrc_passive` is explicit and differs from the same damping in the model
+  by O(timestep): 3.4e-4 in position (0.1% of displacement) over 150 steps at 2 ms with c/m = 0.75. The adapter closes
+  the gap for a law that reports `damping`: it hands `euler` a shallow copy of the model whose `dof_damping` is the
+  model's plus the reported damping (the user's model is not touched), which gives 1.6e-7 against MuJoCo's own damper.
+  The `implicit` and `implicitfast` integrators take damping from `derivative.py`'s own kernels, which this does not
+  cover (the advisory says so); RK4 has no implicit damping anywhere, so an explicit law is exact there.
 * `fwd_actuation` reads a delayed copy of `ctrl` when `nhistory > 0`; `control.law` is refused for such models.
 * The discrete integrator builds its own effective-force solve; the two law stages are refused under it.
 * The probe runs once per forward call. Under RK4 that is four times per step, and the buffer holds the last.

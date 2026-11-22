@@ -91,3 +91,32 @@ def add_scalar_force(scalar: wp.array[int], force: wp.array2d[float], qfrc_passi
     w, i = wp.tid()
     if scalar[i] == 1:
         qfrc_passive[w, i] = qfrc_passive[w, i] + force[w, i]
+
+
+@wp.kernel(enable_backward=False)
+def fold_damping(dof_damping: wp.array2d[float], law: wp.array2d[float], out: wp.array2d[float]):
+    # MJWarp's damping arrays are shared across worlds when they have one row: index them the way MJWarp does.
+    w, i = wp.tid()
+    out[w, i] = dof_damping[w % dof_damping.shape[0], i] + law[w, i]
+
+
+@wp.kernel(enable_backward=False)
+def tick(counter: wp.array[wp.int64]):
+    counter[0] = counter[0] + wp.int64(1)
+
+
+class DeviceMeter:
+    """Counts stage executions on the device: the increment is a kernel, so a captured graph repeats it on replay."""
+
+    def __init__(self, device):
+        self.device = device
+        self._counter = wp.zeros(1, dtype=wp.int64, device=device)
+
+    def tick(self) -> None:
+        wp.launch(tick, dim=1, inputs=[self._counter], device=self.device)
+
+    def count(self) -> int:
+        return int(self._counter.numpy()[0])          # numpy() synchronizes
+
+    def reset(self) -> None:
+        self._counter.zero_()

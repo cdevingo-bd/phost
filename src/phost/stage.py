@@ -73,6 +73,11 @@ class MetricSpec:
             raise ContractError(f"metric {self.name!r}: bad kind {self.kind!r}")
 
 
+# Reported for every stage, by the host: the runtime does not count its own calls (see ``Meter``).
+CALLS = MetricSpec("calls", "count", "none", "counter",
+                   "executions of the stage on the host, including every replay of a captured graph")
+
+
 @dataclass(frozen=True)
 class Tolerance:
     """A gate: the metric must stay at or below ``max`` for an implementation to be accepted."""
@@ -104,6 +109,8 @@ class StageContract:
     extensions: tuple[Extension, ...] = ()
     reference: str | None = None    # "impl": every implementation supplies its own float64 reference;
                                     # otherwise the name of a float64 reference that ships with the stage
+    entry: str = ""                 # the runtime method the host calls once per execution of the stage; the
+                                    # session counts those calls (empty: the stage is not counted)
 
     def __post_init__(self):
         names = [p.name for p in self.ports]
@@ -140,7 +147,8 @@ class StageContract:
             name=self.name, version=self.version, doc=self.doc, swap_class=self.swap_class.value,
             dims=list(self.dims), ports=[port(p) for p in self.ports], invariants=list(self.invariants),
             metrics=[vars(m).copy() for m in self.metrics], tolerances=[vars(t).copy() for t in self.tolerances],
-            extensions=[vars(e).copy() for e in self.extensions], reference=self.reference)
+            extensions=[vars(e).copy() for e in self.extensions], reference=self.reference,
+            entry=self.entry)
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "StageContract":
@@ -154,7 +162,7 @@ class StageContract:
                 metrics=tuple(MetricSpec(**m) for m in d.get("metrics", ())),
                 tolerances=tuple(Tolerance(**t) for t in d.get("tolerances", ())),
                 extensions=tuple(Extension(**e) for e in d.get("extensions", ())),
-                reference=d.get("reference"))
+                reference=d.get("reference"), entry=d.get("entry", ""))
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError(f"malformed contract: {error!r}") from error
 

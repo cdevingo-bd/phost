@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from ..impl import Impl, ImplKind
 from ..registry import Registry
-from ..stage import (Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance)
+from ..stage import (CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance)
 
 NAME = "newton.linear_solve"
 
@@ -53,6 +53,7 @@ CONTRACT = StageContract(
         MetricSpec("status", "bitmask", "none", "bitmask",
                    "sticky OR over worlds: 1 non-finite or non-positive pivot, 2 residual above the gate"),
         MetricSpec("fallbacks", "count", "lower", "counter", "worlds handed back to the host's own solver"),
+        CALLS,
     ),
     tolerances=(
         Tolerance("max_relative_residual", 1e-4, "gate shared with the host-side status bit"),
@@ -69,6 +70,7 @@ CONTRACT = StageContract(
                   "that is also active, and writes that world's outputs. Inactive worlds are ignored."),
     ),
     reference="newton.linear_solve.float64",
+    entry="solve",
 )
 
 

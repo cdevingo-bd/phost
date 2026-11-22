@@ -114,8 +114,10 @@ class _Recorder:
             outs = [p.name for p in contract.ports if p.role is not Role.IN]
             before = {name: _array(getattr(system, name)) for name in ins}
             original(system)
+            # an optional output the host did not hand over is None: there is nothing to record for it
             self.calls.append(dict(inputs=before, after={name: _array(getattr(system, name)) for name in ins},
-                                   outputs={name: _array(getattr(system, name)) for name in outs}))
+                                   outputs={name: _array(getattr(system, name)) for name in outs
+                                            if getattr(system, name, None) is not None}))
 
         setattr(runtime, method, wrapper)
 
@@ -131,6 +133,11 @@ def _check_recorded(host, selection, registry, contract, calls) -> Verdict:
         verdict.ok = False
         return verdict
     worst: dict[str, float] = {}
+
+    def law(inputs):
+        """The implementation's float64 reference on ``inputs`` (floating point entries as float64)."""
+        return impl.reference({k: np.asarray(v, np.float64) if np.asarray(v).dtype.kind == "f" else v
+                               for k, v in inputs.items()}, params)
 
     with Session(host, [selection], registry) as session:
         runtime = session.runtimes[contract.name]
@@ -156,17 +163,14 @@ def _check_recorded(host, selection, registry, contract, calls) -> Verdict:
                         verdict.failures.append(f"output {name!r} is not finite ({kwargs})")
                     if index < len(second) and not np.array_equal(value, second[index]["outputs"][name], equal_nan=True):
                         verdict.failures.append(f"output {name!r} differs between identical calls ({kwargs})")
-                reference = impl.reference({k: np.asarray(v, np.float64) if v.dtype.kind == "f" else v
-                                            for k, v in call["inputs"].items()}, params)
                 is_last = index == len(first) - 1
-                for name, value in evaluate(call, reference, run.get("effect") if is_last else None).items():
+                for name, value in evaluate(call, law(call["inputs"]), run.get("effect") if is_last else None, law).items():
                     worst[name] = max(worst.get(name, 0.0), value)
     verdict.metrics = worst
     for gate in contract.tolerances:
         value = worst.get(gate.metric)
         if value is None:
-            if gate.metric != "traces":
-                verdict.failures.append(f"{gate.metric} was not measured")
+            verdict.failures.append(f"{gate.metric} was not measured")
         elif not value <= gate.max:
             verdict.failures.append(f"{gate.metric} = {value} exceeds {gate.max}")
     verdict.ok = not verdict.failures
