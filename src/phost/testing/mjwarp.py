@@ -14,6 +14,7 @@ from ..hosts.mjwarp import MJWarpHost, _forward_module, _passive_module, _solver
 from ..patch import original_of
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
+from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
 from ..stages import probe_state as ps
 
@@ -55,7 +56,7 @@ class DrivableMJWarpHost(MJWarpHost):
         host assembled. Needed for implementations that use the structure hint, which derives from the
         host's constraint Jacobian and mass matrix.
         """
-        if stage in (pf.NAME, cl.NAME, ps.NAME):
+        if stage in (pf.NAME, cl.NAME, ps.NAME, es.NAME):
             return self._drive_forward(stage, **kwargs)
         if stage != nl.NAME:
             raise ValueError(f"cannot drive {stage}")
@@ -96,6 +97,13 @@ class DrivableMJWarpHost(MJWarpHost):
                 original_of(_passive_module().passive)(m, d)           # the host's own passive force, same state
                 wp.synchronize()
                 effect = dict(delta=actual - d.qfrc_passive.numpy().astype(np.float64))
+            elif stage == es.NAME:
+                from mujoco_warp._src import derivative
+                actual = d.qacc_smooth.numpy().astype(np.float64)
+                scratch = wp.zeros_like(d.qacc_smooth)
+                original_of(derivative.eff_solve)(m, d, scratch)          # the host's own solve of the same state
+                wp.synchronize()
+                effect = dict(qacc=actual, expected=scratch.numpy().astype(np.float64))
             elif stage == cl.NAME and nu:
                 if self.cpu_model is None:
                     raise ValueError("driving control.law needs cpu_model for the float64 actuator-force reference")

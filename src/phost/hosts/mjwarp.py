@@ -1,6 +1,7 @@
 """MuJoCo Warp host adapter, and the MJLab wrapper around it.
 
-Stage ``newton.linear_solve`` replaces ``mujoco_warp._src.solver._cholesky_factorize_solve``. The stages
+Stage ``newton.linear_solve`` replaces ``mujoco_warp._src.solver._cholesky_factorize_solve`` and stage
+``effective.solve`` replaces ``mujoco_warp._src.derivative.eff_solve``. The stages
 ``dof.passive_force``, ``control.law`` and ``probe.state`` wrap ``passive.passive``, ``forward.fwd_actuation``
 and ``forward.forward``. These are private MJWarp functions, so every install is guarded by a hash of the
 function's source (and, for implementations that use the structure hint, of the code that assembles the
@@ -24,6 +25,7 @@ from ..host import Capability, Host, HostInfo, ModelFacts, Provision, StageBindi
 from ..patch import PatchPoint, Target
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
+from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
 from ..stages import probe_state as ps
 
@@ -49,6 +51,12 @@ REVIEWED_FORWARD = {"24421d5832eceecadd616dce6424b9db38efc7af5b7e80e3a645814d9eb
 # to the derivative) and _euler_damp_qfrc adds timestep * that to the diagonal of the mass matrix it solves with.
 REVIEWED_EULER = {"7023bc7c8027667766292b6038e3e43cd446169a28edebc050ca0200ee7f06cc": _BUILD}
 _EULER = ("euler", "_compute_damping_deriv", "_euler_damp_qfrc")
+# forward.fwd_acceleration calls derivative.eff_solve(m, d, d.qacc_smooth) when the integrator is DISCRETE. The stage
+# replaces it for the model where the effective metric is exactly M + diag + K: the guard hashes the solve, the
+# matrix-vector product it iterates with, the CSR kernel that product launches, and the right-hand-side kernel. M_hat is
+# assembled from the same arrays that kernel reads (M_mulm_*, efm_K_*, d.M, d.efm_diag, d.efm_K_val).
+REVIEWED_EFFECTIVE = {"810004a7688ebb507b79f59d6fc52fc3ba9f8cffeafb1fd991cef5e21ab32f5a": _BUILD}
+_EFFECTIVE = ("eff_solve", "eff_mul_m", "_eff_rhs", "_eff_mul_diag_and_csr")
 # Functions that assemble the Newton Hessian. The structure hint depends on how they build H.
 _ASSEMBLY = ("_update_gradient", "_update_gradient_incremental", "_JTDACJ_sparse",
              "_update_gradient_h_incremental_sparse", "_update_gradient_init_h_sparse")
@@ -67,6 +75,43 @@ def _forward_module():
 def _passive_module():
     from mujoco_warp._src import passive
     return passive
+
+
+def _derivative_module():
+    from mujoco_warp._src import derivative
+    return derivative
+
+
+def effective_blocker(model, types) -> str:
+    """Why ``effective.solve`` cannot replace the host's solve for this model, or an empty string.
+
+    The host solves M_hat qacc = rhs with an iterative method. A direct solve of the assembled matrix is exact only when
+    M_hat is exactly the mass matrix plus a diagonal plus the CSR flex stiffness: every other term the host can add (flex
+    contact, matrix-free flex terms, fluid, tendons, actuators, a backbone preconditioner) is absent. Read from Python
+    attributes of the model only, so it is safe to ask while a graph is being captured."""
+    try:
+        disable, enable = int(model.opt.disableflags), int(model.opt.enableflags)
+        checks = [
+            (model.opt.integrator == types.IntegratorType.DISCRETE, "the host only calls this solve with the discrete integrator"),
+            (model.nefmK > 0, "the model has no flex stiffness block: the host solves with its stored factorization"),
+            (not (disable & types.DisableBit.SPRING and disable & types.DisableBit.DAMPER),
+             "spring and damper are both disabled, so the host takes its direct path"),
+            (not model.has_non_simple_flex, "the model has flex terms the host applies matrix-free"),
+            (not model.has_flex_passive, "the model has a flex contact term"),
+            (not model.has_fluid, "the model has a fluid term"),
+            (not model.has_efm_actuator, "the model has an actuator term"),
+            (not model.has_tendon_stiffness, "the model has a tendon stiffness term"),
+            (not model.has_tendon_damping, "the model has a tendon damping term"),
+            (not model.efm0_active, "the model uses the host's backbone preconditioner path"),
+            (model.flex_interp_assemblable, "the model's flex interpolation cannot be assembled"),
+            (not enable & types.EnableBit.SLEEP, "sleeping is enabled"),
+        ]
+    except AttributeError as error:
+        return f"this MuJoCo Warp build does not expose {error.args[0] if error.args else 'a field'} the stage reads"
+    for ok, reason in checks:
+        if not ok:
+            return reason
+    return ""
 
 
 def _read_hook() -> str:
@@ -105,6 +150,7 @@ class MJWarpHost(Host):
         self._buffers: dict[str, Any] = {}
         self._stages: Mapping[str, StageBinding] | None = None
         self._scalar = self._read_scalar_dofs()          # the only device read facts() needs; see _scalar_dofs
+        self._effective_blocker = effective_blocker(model, types)
         self.info = HostInfo(name=name, version=_version(), build_id=None, patched=None)
 
     # -- Host ---------------------------------------------------------------------------------
@@ -117,7 +163,8 @@ class MJWarpHost(Host):
             sparse=bool(m.is_sparse), sleep=bool(enable & t.EnableBit.SLEEP),
             device_kind="cuda" if self.device.is_cuda else "cpu",
             extra={"device": str(self.device), "nq": int(m.nq), "nu": int(m.nu),
-                   "nhistory": int(getattr(m, "nhistory", 0)), "scalar_dofs": int(self._scalar_dofs()[0].sum())})
+                   "nhistory": int(getattr(m, "nhistory", 0)), "scalar_dofs": int(self._scalar_dofs()[0].sum()),
+                   "effective_blocker": self._effective_blocker})
 
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, cpu_model=self.cpu_model, solver=_solver_module())
@@ -139,6 +186,9 @@ class MJWarpHost(Host):
                 nl.CONTRACT, point, _make_dispatch,
                 extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
             passive, forward = _passive_module(), _forward_module()
+            self._stages[es.NAME] = StageBinding(es.CONTRACT, _point(es.NAME, _derivative_module(), "eff_solve",
+                                                                     REVIEWED_EFFECTIVE, also=_EFFECTIVE[1:]),
+                                                 _make_effective_dispatch)
             for contract, module, attribute, reviewed, make in (
                     (pf.CONTRACT, passive, "passive", REVIEWED_PASSIVE, _make_passive_dispatch),
                     (cl.CONTRACT, forward, "fwd_actuation", REVIEWED_ACTUATION, _make_control_dispatch),
@@ -188,6 +238,14 @@ class MJWarpHost(Host):
                 mass_cols=wp.array(cols, dtype=wp.int32, device=self.device),
                 mass_element=wp.array(element, dtype=wp.int32, device=self.device))
         return SimpleNamespace(**self._buffers)
+
+    def effective_buffers(self) -> SimpleNamespace:
+        """The dense M_hat and right-hand side the effective-solve dispatch fills (allocated when first asked for)."""
+        if "effective/matrix" not in self._buffers:
+            wp, n, nv = self._wp, int(self.data.nworld), int(self.model.nv)
+            self._buffers["effective/matrix"] = wp.zeros((n, nv, nv), dtype=wp.float32, device=self.device)
+            self._buffers["effective/rhs"] = wp.zeros((n, nv), dtype=wp.float32, device=self.device)
+        return SimpleNamespace(matrix=self._buffers["effective/matrix"], rhs=self._buffers["effective/rhs"])
 
     def probe_buffer(self, width: int):
         """The host-owned ``value`` array of a probe of this width (created once, so graphs can capture it)."""
@@ -266,6 +324,27 @@ def _make_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
                               outputs=[flags], device=device)
             system.structure_hint = hint
         runtime.solve(system)
+
+    return dispatch
+
+
+def _make_effective_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
+    wp, k = host._wp, host._k
+    bufs, nworld, nv, device = host.effective_buffers(), int(host.data.nworld), int(host.model.nv), host.device
+
+    def dispatch(m, d, qacc, qfrc=None):
+        if m is not host.model:
+            return original(m, d, qacc, qfrc)
+        _check_same_model(host, d)
+        if qfrc is None:
+            wp.launch(k.effective_rhs, dim=(nworld, nv), inputs=[d.qfrc_smooth, d.efm_c, d.efm_ca], outputs=[bufs.rhs],
+                      device=device)
+        else:
+            wp.copy(bufs.rhs, qfrc)
+        wp.launch(k.effective_assemble, dim=(nworld, nv), device=device,
+                  inputs=[m.M_mulm_rowadr, m.M_mulm_col, m.M_mulm_madr, m.efm_K_rownnz, m.efm_K_rowadr, m.efm_K_colind, nv,
+                          d.M, d.efm_diag, d.efm_K_val], outputs=[bufs.matrix])
+        runtime.solve(es.EffectiveSystem(h=bufs.matrix, rhs=bufs.rhs, qacc=qacc))
 
     return dispatch
 

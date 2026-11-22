@@ -19,6 +19,7 @@ from ..host import Capability, Host, HostInfo, ModelFacts, Provision, StageBindi
 from ..patch import PatchPoint, Target, original_of
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
+from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
 from ..stages import probe_state as ps
 
@@ -34,6 +35,13 @@ def _native_solve(m, d, ctx, skip_unchanged=False, skip_noflip=False):
         ctx.search[w] = (-x).astype(np.float32)
         ctx.search_dot[w] = np.float32(x @ x)
         ctx.newton_decrement[w] = np.float32(np.asarray(ctx.grad[w, :m.nv], np.float64) @ x)
+
+
+def _native_eff_solve(m, d, qacc, qfrc=None):
+    """The fake host's own effective-metric solve: float64 per world, from the system the host assembled."""
+    rhs = d.eff_rhs if qfrc is None else qfrc
+    for w in range(d.nworld):
+        qacc[w, :m.nv] = np.linalg.solve(es._symmetric(d.eff_h[w], m.nv), np.asarray(rhs[w, :m.nv], np.float64)).astype(np.float32)
 
 
 def _assemble(m, d, ctx):
@@ -81,7 +89,7 @@ class FakeHost(Host):
     def __init__(self, nv: int = 12, world_count: int = 4, nv_pad: int = 16, seed: int = 0, coupled: int = 4,
                  nu: int = 3, damping: float = DAMPING):
         self.ns = SimpleNamespace(solve_hook=_native_solve, assemble=_assemble, passive=_native_passive,
-                                  fwd_actuation=_native_actuation, euler=_native_euler)
+                                  fwd_actuation=_native_actuation, euler=_native_euler, eff_solve=_native_eff_solve)
         self.ns.forward = lambda m, d: _native_forward(m, d, self.ns)
         scalar = np.ones(nv, np.int32)
         scalar[-3:] = 0                                  # the last DOFs stand in for a free joint
@@ -92,20 +100,22 @@ class FakeHost(Host):
         self.data = SimpleNamespace(nworld=world_count, qpos=f32(world_count, nv), qvel=f32(world_count, nv),
                                     qacc=f32(world_count, nv), time=f32(world_count), ctrl=f32(world_count, nu),
                                     qfrc_passive=f32(world_count, nv), actuator_length=f32(world_count, nu),
-                                    actuator_velocity=f32(world_count, nu), actuator_force=f32(world_count, nu))
+                                    actuator_velocity=f32(world_count, nu), actuator_force=f32(world_count, nu),
+                                    eff_h=f32(world_count, nv_pad, nv_pad), eff_rhs=f32(world_count, nv_pad),
+                                    eff_qacc=f32(world_count, nv))
         self._buffers: dict = {}
         self.rng = np.random.default_rng(seed)
         self.coupled = coupled
         self._reviewed_hook = source_hash(self.ns.solve_hook)
         self._reviewed_assemble = source_hash(self.ns.assemble)
-        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward", "euler")}
+        self._reviewed = {name: source_hash(getattr(self.ns, name)) for name in ("passive", "fwd_actuation", "forward", "euler", "eff_solve")}
         self._stages = None
 
     # -- Host ---------------------------------------------------------------------------------
     def facts(self) -> ModelFacts:
         return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu",
                           extra=dict(nq=self.model.nq, nu=self.model.nu, nhistory=0,
-                                     scalar_dofs=int(self.model.scalar.sum())))
+                                     scalar_dofs=int(self.model.scalar.sum()), effective_blocker=""))
 
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, ns=self.ns)
@@ -121,6 +131,7 @@ class FakeHost(Host):
             })
             self._stages = {nl.NAME: StageBinding(nl.CONTRACT, point, _make_dispatch,
                                                   extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
+            self._stages[es.NAME] = StageBinding(es.CONTRACT, self._point(es.NAME, "eff_solve"), _effective_dispatch)
             for contract, attribute, make in ((pf.CONTRACT, "passive", _passive_dispatch),
                                               (cl.CONTRACT, "fwd_actuation", _control_dispatch),
                                               (ps.CONTRACT, "forward", _probe_dispatch)):
@@ -166,6 +177,8 @@ class FakeHost(Host):
 
     def drive(self, stage: str, *, owned: bool = True, active=None, skip_unchanged=False, skip_noflip=False, seed: int = 0):
         """Run one call of ``stage`` through whatever is installed. Returns inputs, outputs, nv."""
+        if stage == es.NAME:
+            return self._drive_effective(owned=owned, seed=seed)
         if stage != nl.NAME:
             return self._drive_forward(stage, owned=owned, seed=seed)
         ctx = self.make_ctx(active)
@@ -178,6 +191,22 @@ class FakeHost(Host):
                     outputs=dict(search=ctx.search, search_dot=ctx.search_dot, newton_decrement=ctx.newton_decrement),
                     nv=self.model.nv, active=act)
 
+
+    def _drive_effective(self, *, owned, seed):
+        """One effective-metric solve of a random SPD system. ``effect`` is the host's own solve of the same system."""
+        rng, d, n, pad = np.random.default_rng(seed), self.data, self.model.nv, self.model.nv_pad
+        d.eff_h[:] = 7.0                                      # garbage everywhere, then the defined upper triangle
+        d.eff_rhs[:] = 0.0
+        for w in range(d.nworld):
+            a = rng.standard_normal((n, n))
+            sym = a @ a.T / n + np.diag(rng.uniform(1.0, 3.0, n))
+            d.eff_h[w, :n, :n] = np.triu(sym).astype(np.float32) + np.tril(np.full((n, n), 7.0, np.float32), -1)
+            d.eff_rhs[w, :n] = rng.standard_normal(n)
+        d.eff_qacc[:] = SENTINEL
+        self.ns.eff_solve(self.model if owned else self.other_model, d, d.eff_qacc)
+        actual = d.eff_qacc.copy()
+        original_of(self.ns.eff_solve)(self.model, d, d.eff_qacc)
+        return dict(effect=dict(qacc=actual, expected=d.eff_qacc.copy()), nv=n)
 
     def _random_state(self, seed):
         rng, d = np.random.default_rng(seed), self.data
@@ -241,6 +270,15 @@ def _make_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
                         flags[w, :m.nv] = ((np.abs(sym - np.diag(np.diag(sym))).sum(axis=1)) > 0).astype(flags.dtype)
             system.structure_hint = hint
         runtime.solve(system)
+
+    return dispatch
+
+
+def _effective_dispatch(original, runtime, host: FakeHost, allowed: frozenset):
+    def dispatch(m, d, qacc, qfrc=None):
+        if m is not host.model:
+            return original(m, d, qacc, qfrc)
+        runtime.solve(es.EffectiveSystem(h=d.eff_h, rhs=d.eff_rhs if qfrc is None else qfrc, qacc=qacc))
 
     return dispatch
 

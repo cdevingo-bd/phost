@@ -24,6 +24,7 @@ forward
   fwd_actuation                                          reads d.ctrl -> actuator_force -> qfrc_actuator
   fwd_acceleration (factorize=True)
     qfrc_smooth, factor_solve_i / solve_m                qacc_smooth = M^-1 qfrc_smooth
+                                                         (DISCRETE only: derivative.eff_solve instead, PCG on M_hat)
   solver.solve
     Newton iterations: update_constraint, update_gradient (assembles H),
                        _cholesky_factorize_solve, _linesearch
@@ -40,6 +41,7 @@ by `step`. Anything inside a kernel (a `wp.func` such as `_efc_row`) is not atta
 | boundary | form | status |
 | --- | --- | --- |
 | `solver._cholesky_factorize_solve` | private function, called per Newton iteration | **built**: `newton.linear_solve`, exact |
+| `derivative.eff_solve` | function, called once per forward when the integrator is DISCRETE (the Euler path never calls it) | **built**: `effective.solve`, exact; refused unless the system is exactly mass + diagonal + CSR flex stiffness (see below) |
 | `passive.passive` | public function, called once per forward | **built**: `dof.passive_force`, post-hook, model changing |
 | `forward.fwd_actuation` | function, called by `forward` and `step2` | **built**: `control.law`, pre-hook, model changing |
 | `forward.forward` | function, called by `step` (4 times under RK4) | **built**: `probe.state`, post-hook, observer |
@@ -66,4 +68,14 @@ by `step`. Anything inside a kernel (a `wp.func` such as `_efc_row`) is not atta
   cover (the advisory says so); RK4 has no implicit damping anywhere, so an explicit law is exact there.
 * `fwd_actuation` reads a delayed copy of `ctrl` when `nhistory > 0`; `control.law` is refused for such models.
 * The discrete integrator builds its own effective-force solve; the two law stages are refused under it.
+* `derivative.eff_solve(m, d, qacc, qfrc=None)` solves `M_hat qacc = qfrc_smooth + efm_c + efm_ca` by PCG. `effective.solve`
+  replaces it only when `M_hat` is exactly `M + diag(efm_diag) + K` with `K` in CSR form (`efm_K_*`), assembled from
+  `m.M_mulm_*`, `d.M`, `d.efm_diag`, `d.efm_K_val`. Anything else adds a term the assembly would miss, so the adapter
+  refuses with the reason: non-DISCRETE integrator, `nefmK == 0`, springs and dampers both disabled, non-simple flex,
+  flex passive or contact terms, fluid, an `efm` actuator, tendon stiffness or damping, `efm0_active`, a flex
+  interpolation that cannot be assembled, or sleeping. The dispatch is written with the model's arrays only
+  (`_eff_rhs`, `_eff_mul_m`, `_eff_mul_diag_and_csr` and `eff_solve` are all hashed).
+* The native PCG's cost depends on the system's conditioning, which depends on the time step and stiffness. It can be
+  well under a millisecond (the lab's 12x12 membrane at 0.5 ms), where no direct solve can win, or several (a stiffer
+  sheet at a larger step).
 * The probe runs once per forward call. Under RK4 that is four times per step, and the buffer holds the last.

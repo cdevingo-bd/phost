@@ -7,9 +7,20 @@ implementation against it; the same check gates a leaderboard entry.
 | stage | swap class | reference | hook on MJWarp | what an implementation provides |
 | --- | --- | --- | --- | --- |
 | `newton.linear_solve` | exact | `newton.linear_solve.float64`, shipped with the stage | `solver._cholesky_factorize_solve` | `solve(system)`: the Newton step for `H`, `g` |
+| `effective.solve` | exact | `effective.solve.float64`, shipped with the stage | `derivative.eff_solve` | `solve(system)`: `x = M_hat^-1 rhs` for the host-assembled effective metric (discrete integrator only) |
 | `dof.passive_force` | model changing | the implementation's own, `Impl.reference` | after `passive.passive` | `apply(system)`: force per scalar DOF from `q`, `v`, `time` |
 | `control.law` | model changing | the implementation's own | before `forward.fwd_actuation` | `apply(system)`: `ctrl` from actuator `length`, `velocity`, `time` |
 | `probe.state` | observer | the implementation's own | after `forward.forward` | `observe(system)`: `value[world, width]` from `qpos`, `qvel`, `qacc`, `time` |
+
+`effective.solve` exists only under the discrete integrator, where MuJoCo Warp solves a mass-plus-stiffness system with
+conjugate gradients before its constraint solver runs. The host adapter assembles that matrix densely per world (it
+knows how the pieces add up) and hands it over, so an implementation never sees the host's layouts. The adapter refuses
+the hook, naming why, whenever the host's system holds anything beyond mass, diagonal and flex stiffness: a model on
+another integrator, no flex stiffness, flex contact or passive terms, fluid, an actuator or tendon term, or sleeping
+(`facts.extra["effective_blocker"]` holds the reason; empty means replaceable). Besides the float64 residual, the check
+reports `max_native_difference`: the host's own solve of the same state, which catches an assembly that differs from the
+matrix the host iterates with. A direct solve is only worth installing where the host's iteration is slow; measure first
+(see the numbers in `phost-coupledchol`'s README).
 
 ## What the swap class means
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
 
 
@@ -76,3 +77,46 @@ class InactiveWriterRuntime(ReferenceRuntime):
     def solve(self, s):
         super().solve(s)
         s.search[:] += 0.5
+
+
+class EffectiveReferenceRuntime:
+    """Solves the effective-metric system in float64 with numpy. Correct by construction."""
+
+    def __init__(self, host, params):
+        self.host = host
+
+    def solve(self, s: es.EffectiveSystem) -> None:
+        nv = self.host.facts().nv
+        h, rhs = np.asarray(s.h.numpy() if hasattr(s.h, "numpy") else s.h), np.asarray(s.rhs.numpy() if hasattr(s.rhs, "numpy") else s.rhs)
+        out = np.zeros((h.shape[0], nv), np.float32)
+        for w in range(h.shape[0]):
+            out[w] = np.linalg.solve(es._symmetric(h[w], nv), np.asarray(rhs[w, :nv], np.float64)).astype(np.float32)
+        if hasattr(s.qacc, "assign"):
+            s.qacc.assign(out)
+        else:
+            s.qacc[:, :nv] = out
+
+    def metrics(self):
+        return {"status": 0}
+
+
+class WrongEffectiveRuntime(EffectiveReferenceRuntime):
+    """A solution that is a little wrong: fails the residual gate."""
+
+    def solve(self, s):
+        super().solve(s)
+        if hasattr(s.qacc, "assign"):
+            s.qacc.assign(s.qacc.numpy() * 1.01)
+        else:
+            s.qacc *= 1.01
+
+
+class EffectiveInputWriterRuntime(EffectiveReferenceRuntime):
+    """Modifies the right-hand side: must be caught."""
+
+    def solve(self, s):
+        super().solve(s)
+        if hasattr(s.rhs, "assign"):
+            s.rhs.assign(s.rhs.numpy() + 1.0)
+        else:
+            s.rhs[:] += 1.0

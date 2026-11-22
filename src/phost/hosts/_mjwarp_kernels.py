@@ -74,6 +74,32 @@ def mark_mass(refactor: wp.array(dtype=wp.int32), rows: wp.array(dtype=wp.int32)
         flag[w, cols[e]] = 1
 
 
+@wp.kernel(enable_backward=False)
+def effective_assemble(m_rowadr: wp.array(dtype=wp.int32), m_col: wp.array(dtype=wp.int32),
+                       m_madr: wp.array(dtype=wp.int32), k_rownnz: wp.array(dtype=wp.int32),
+                       k_rowadr: wp.array(dtype=wp.int32), k_colind: wp.array(dtype=wp.int32), nv: int,
+                       mass: wp.array2d(dtype=wp.float32), diag: wp.array2d(dtype=wp.float32),
+                       kval: wp.array2d(dtype=wp.float32), out: wp.array3d(dtype=wp.float32)):
+    # M_hat = M + diag + K, as the host's matrix-vector product applies it: one thread per (world, row) gathers the
+    # mass entries, adds the diagonal and scatters the CSR stiffness row. No atomics, so the result is repeatable.
+    w, row = wp.tid()
+    for j in range(nv):
+        out[w, row, j] = 0.0
+    for k in range(m_rowadr[row], m_rowadr[row + 1]):
+        out[w, row, m_col[k]] += mass[w, m_madr[k]]
+    out[w, row, row] += diag[w, row]
+    adr = k_rowadr[row]
+    for t in range(k_rownnz[row]):
+        out[w, row, k_colind[adr + t]] += kval[w, adr + t]
+
+
+@wp.kernel(enable_backward=False)
+def effective_rhs(qfrc_smooth: wp.array2d(dtype=wp.float32), efm_c: wp.array2d(dtype=wp.float32),
+                  efm_ca: wp.array2d(dtype=wp.float32), out: wp.array2d(dtype=wp.float32)):
+    w, i = wp.tid()
+    out[w, i] = qfrc_smooth[w, i] + efm_c[w, i] + efm_ca[w, i]
+
+
 @wp.kernel
 def gather_scalar_q(qpos: wp.array2d[float], dof_qposadr: wp.array[int], q: wp.array2d[float]):
     """q[world, dof] = qpos at the DOF's joint when that joint is a scalar (hinge, slide), else 0."""

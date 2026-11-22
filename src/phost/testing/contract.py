@@ -12,6 +12,7 @@ from ..session import Selection, Session
 from ..stage import Role, StageContract
 from ..stages import control_law as cl
 from ..stages import dof_passive_force as pf
+from ..stages import effective_solve as es
 from ..stages import newton_linear as nl
 from ..stages import probe_state as ps
 
@@ -59,6 +60,8 @@ def check_impl(host, selection: Selection, registry: Registry | None = None, *, 
     contract: StageContract = registry.contract(selection.stage, registry.impl(selection.impl).stage_version)
     if contract.name in RECORDED:
         return _check_recorded(host, selection, registry, contract, calls)
+    if contract.name == es.NAME:
+        return _check_effective(host, selection, registry, contract, calls)
     evaluate = EVALUATORS[contract.name]
     calls = calls or [dict(), dict(active=[1, 0] + [1] * (host.data.nworld - 2)), dict(skip_unchanged=True, skip_noflip=True)]
     verdict = Verdict(contract.name, selection.impl, True)
@@ -120,6 +123,46 @@ class _Recorder:
                                             if getattr(system, name, None) is not None}))
 
         setattr(runtime, method, wrapper)
+
+
+def _check_effective(host, selection, registry, contract, calls) -> Verdict:
+    """``effective.solve``: record what the runtime is handed and returns while the host runs, then judge it in float64
+    and against the host's own solve of the same state (the host drive reports that as ``effect``)."""
+    verdict = Verdict(contract.name, selection.impl, True)
+    calls = calls or [dict(seed=0), dict(seed=1), dict(seed=2)]
+    worst: dict[str, float] = {}
+    with Session(host, [selection], registry) as session:
+        recorder = _Recorder(session.runtimes[contract.name], "solve", contract)
+        for kwargs in calls:
+            recorder.calls.clear()
+            run = host.drive(contract.name, **kwargs)
+            if not recorder.calls:
+                verdict.failures.append(f"the runtime was never called ({kwargs})")
+                continue
+            nv = int(run["nv"])
+            for call in recorder.calls:
+                for name in ("h", "rhs"):
+                    if not np.array_equal(_defined(name, call["inputs"][name], nv), _defined(name, call["after"][name], nv),
+                                          equal_nan=True):
+                        verdict.failures.append(f"input {name!r} was modified ({kwargs})")
+                qacc = call["outputs"]["qacc"]
+                if not np.all(np.isfinite(qacc[:, :nv])):
+                    verdict.failures.append(f"output 'qacc' is not finite ({kwargs})")
+                for name, value in es.evaluate(call["inputs"], call["outputs"], nv).items():
+                    worst[name] = max(worst.get(name, 0.0), value)
+            effect = run.get("effect")
+            if effect is not None:
+                value = es.native_difference(effect["qacc"], effect["expected"])
+                worst["max_native_difference"] = max(worst.get("max_native_difference", 0.0), value)
+    verdict.metrics = worst
+    for gate in contract.tolerances:
+        value = worst.get(gate.metric)
+        if value is None:
+            verdict.failures.append(f"{gate.metric} was not measured")
+        elif not value <= gate.max:
+            verdict.failures.append(f"{gate.metric} = {value} exceeds {gate.max}")
+    verdict.ok = not verdict.failures
+    return verdict
 
 
 def _check_recorded(host, selection, registry, contract, calls) -> Verdict:
