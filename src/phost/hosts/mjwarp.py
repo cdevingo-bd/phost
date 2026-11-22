@@ -21,13 +21,9 @@ from typing import Any, Mapping
 
 from ..errors import CapabilityError
 from ..guard import Guard, source_hash
-from ..host import Capability, Host, HostInfo, ModelFacts, Provision, StageBinding
-from ..patch import PatchPoint, Target
-from ..stages import control_law as cl
-from ..stages import dof_passive_force as pf
-from ..stages import effective_solve as es
+from ..host import Capability, Host, HostInfo, ModelFacts, NativeTiming, Provision, StageBinding
+from ..patch import PatchPoint, Target, original_of
 from ..stages import newton_linear as nl
-from ..stages import probe_state as ps
 
 # Reviewed builds. Add a hash only after re-reviewing the new source. The label says what was reviewed.
 REVIEWED_HOOKS = {
@@ -135,6 +131,19 @@ def _mass_pairs(model):
     return rows.astype(np.int32), cols.astype(np.int32), elements[rows, cols].astype(np.int32)
 
 
+# Stage bindings other than the Newton solve are built by factories, each ``(host) -> StageBinding``, registered here. A
+# module that adds a stage to this host calls ``register_binding`` once at import; the shipped ones live in
+# ``mjwarp_stages`` and are loaded at the bottom of this module.
+BINDING_FACTORIES: list = []
+
+
+def register_binding(factory):
+    """Add a stage to every MuJoCo Warp host built from now on (and to hosts that have not yet listed their stages)."""
+    if factory not in BINDING_FACTORIES:
+        BINDING_FACTORIES.append(factory)
+    return factory
+
+
 class MJWarpHost(Host):
     capabilities = Capability.PATCH | Capability.NATIVE
     backend = "warp"
@@ -163,8 +172,7 @@ class MJWarpHost(Host):
             sparse=bool(m.is_sparse), sleep=bool(enable & t.EnableBit.SLEEP),
             device_kind="cuda" if self.device.is_cuda else "cpu",
             extra={"device": str(self.device), "nq": int(m.nq), "nu": int(m.nu),
-                   "nhistory": int(getattr(m, "nhistory", 0)), "scalar_dofs": int(self._scalar_dofs()[0].sum()),
-                   "effective_blocker": self._effective_blocker})
+                   "nhistory": int(getattr(m, "nhistory", 0)), "scalar_dofs": int(self._scalar_dofs()[0].sum())})
 
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, cpu_model=self.cpu_model, solver=_solver_module())
@@ -184,18 +192,13 @@ class MJWarpHost(Host):
             })
             self._stages = {nl.NAME: StageBinding(
                 nl.CONTRACT, point, _make_dispatch,
-                extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()})}
-            passive, forward = _passive_module(), _forward_module()
-            self._stages[es.NAME] = StageBinding(es.CONTRACT, _point(es.NAME, _derivative_module(), "eff_solve",
-                                                                     REVIEWED_EFFECTIVE, also=_EFFECTIVE[1:]),
-                                                 _make_effective_dispatch)
-            for contract, module, attribute, reviewed, make in (
-                    (pf.CONTRACT, passive, "passive", REVIEWED_PASSIVE, _make_passive_dispatch),
-                    (cl.CONTRACT, forward, "fwd_actuation", REVIEWED_ACTUATION, _make_control_dispatch),
-                    (ps.CONTRACT, forward, "forward", REVIEWED_FORWARD, _make_probe_dispatch)):
-                self._stages[contract.name] = StageBinding(contract, _point(contract.name, module, attribute, reviewed), make)
-            self._stages[pf.NAME] = dataclasses.replace(self._stages[pf.NAME], extensions={"implicit_damping": Provision(
-                point=_point(pf.NAME, forward, "euler", REVIEWED_EULER, also=_EULER[1:]), wrap=_wrap_euler)})
+                extensions={"structure_hint": Provision(guard="assembly"), "fallback": Provision()},
+                native_timing=NativeTiming(
+                    lambda host: (lambda: original_of(solver.solve)(host.model, host.data)),
+                    enclosing="the solver phase (solver.solve), which runs the stage once per Newton iteration"))}
+            for factory in BINDING_FACTORIES:                  # every other stage: see mjwarp_stages.py
+                binding = factory(self)
+                self._stages[binding.contract.name] = binding
         return self._stages
 
     def _scalar_dofs(self):
@@ -328,53 +331,9 @@ def _make_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
     return dispatch
 
 
-def _make_effective_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
-    wp, k = host._wp, host._k
-    bufs, nworld, nv, device = host.effective_buffers(), int(host.data.nworld), int(host.model.nv), host.device
-
-    def dispatch(m, d, qacc, qfrc=None):
-        if m is not host.model:
-            return original(m, d, qacc, qfrc)
-        _check_same_model(host, d)
-        if qfrc is None:
-            wp.launch(k.effective_rhs, dim=(nworld, nv), inputs=[d.qfrc_smooth, d.efm_c, d.efm_ca], outputs=[bufs.rhs],
-                      device=device)
-        else:
-            wp.copy(bufs.rhs, qfrc)
-        wp.launch(k.effective_assemble, dim=(nworld, nv), device=device,
-                  inputs=[m.M_mulm_rowadr, m.M_mulm_col, m.M_mulm_madr, m.efm_K_rownnz, m.efm_K_rowadr, m.efm_K_colind, nv,
-                          d.M, d.efm_diag, d.efm_K_val], outputs=[bufs.matrix])
-        runtime.solve(es.EffectiveSystem(h=bufs.matrix, rhs=bufs.rhs, qacc=qacc))
-
-    return dispatch
-
-
 def _check_same_model(host: MJWarpHost, d) -> None:
     if d.nworld != int(host.data.nworld) or d.qpos.device != host.device:
         raise ValueError("data world count or device mismatch")
-
-
-def _make_passive_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
-    wp, k = host._wp, host._k
-    bufs, nworld, nv, device = host.buffers(), int(host.data.nworld), int(host.model.nv), host.device
-
-    damping = bufs.damping if "implicit_damping" in allowed else None
-
-    def dispatch(m, d):
-        original(m, d)
-        if m is not host.model:
-            return
-        _check_same_model(host, d)
-        wp.launch(k.gather_scalar_q, dim=(nworld, nv), inputs=[d.qpos, bufs.dof_qposadr], outputs=[bufs.q], device=device)
-        bufs.force.zero_()
-        if damping is not None:
-            damping.zero_()
-        runtime.apply(pf.DofForceSystem(q=bufs.q, v=d.qvel, time=d.time, scalar=bufs.scalar, force=bufs.force,
-                                        damping=damping))
-        wp.launch(k.add_scalar_force, dim=(nworld, nv), inputs=[bufs.scalar, bufs.force], outputs=[d.qfrc_passive],
-                  device=device)
-
-    return dispatch
 
 
 def _wrap_euler(original, host: MJWarpHost):
@@ -397,28 +356,6 @@ def _wrap_euler(original, host: MJWarpHost):
     return dispatch
 
 
-def _make_control_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
-    def dispatch(m, d):
-        if m is host.model:
-            _check_same_model(host, d)
-            runtime.apply(cl.ControlSystem(length=d.actuator_length, velocity=d.actuator_velocity, time=d.time, ctrl=d.ctrl))
-        original(m, d)
-
-    return dispatch
-
-
-def _make_probe_dispatch(original, runtime, host: MJWarpHost, allowed: frozenset):
-    value = host.probe_buffer(int(runtime.width))
-
-    def dispatch(m, d):
-        original(m, d)
-        if m is host.model:
-            _check_same_model(host, d)
-            runtime.observe(ps.ProbeSystem(qpos=d.qpos, qvel=d.qvel, qacc=d.qacc, time=d.time, value=value))
-
-    return dispatch
-
-
 class MJLabHost(MJWarpHost):
     """MJLab simulation: wraps MJWarp's model and data (``sim.wp_model``, ``sim.wp_data``).
 
@@ -430,3 +367,7 @@ class MJLabHost(MJWarpHost):
             if not hasattr(sim, attribute):
                 raise CapabilityError(f"object {type(sim).__name__!r} has no {attribute!r}; expected an MJLab Simulation")
         super().__init__(sim.wp_model, sim.wp_data, cpu_model=sim.mj_model, name="mjlab")
+
+
+from . import mjwarp_stages  # noqa: E402,F401  (registers the shipped stage bindings)
+from . import mjwarp_body_wrench  # noqa: E402,F401

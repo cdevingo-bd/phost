@@ -2,7 +2,8 @@
 
 Each stage is a contract (`phost.stages.*.CONTRACT`, machine-readable, `Registry.describe()` lists them) with a
 swap class, a float64 reference, metrics and tolerances. `phost.testing.contract.check_impl` judges an
-implementation against it; the same check gates a leaderboard entry.
+implementation against it; the same check gates a leaderboard entry. Each stage also carries a judge that says how a run of
+it is measured, so a new stage needs no change to the check ([docs/ADDING_A_STAGE.md](ADDING_A_STAGE.md)).
 
 | stage | swap class | reference | hook on MJWarp | what an implementation provides |
 | --- | --- | --- | --- | --- |
@@ -11,13 +12,14 @@ implementation against it; the same check gates a leaderboard entry.
 | `dof.passive_force` | model changing | the implementation's own, `Impl.reference` | after `passive.passive` | `apply(system)`: force per scalar DOF from `q`, `v`, `time` |
 | `control.law` | model changing | the implementation's own | before `forward.fwd_actuation` | `apply(system)`: `ctrl` from actuator `length`, `velocity`, `time` |
 | `probe.state` | observer | the implementation's own | after `forward.forward` | `observe(system)`: `value[world, width]` from `qpos`, `qvel`, `qacc`, `time` |
+| `body.wrench` | model changing | the implementation's own | before `forward.xfrc_accumulate` | `apply(system)`: force and torque per body from `xpos`, `cvel`, `time` |
 
 `effective.solve` exists only under the discrete integrator, where MuJoCo Warp solves a mass-plus-stiffness system with
 conjugate gradients before its constraint solver runs. The host adapter assembles that matrix densely per world (it
 knows how the pieces add up) and hands it over, so an implementation never sees the host's layouts. The adapter refuses
 the hook, naming why, whenever the host's system holds anything beyond mass, diagonal and flex stiffness: a model on
 another integrator, no flex stiffness, flex contact or passive terms, fluid, an actuator or tendon term, or sleeping
-(`facts.extra["effective_blocker"]` holds the reason; empty means replaceable). Besides the float64 residual, the check
+(`host.refusal("effective.solve")` returns the reason, or None when the stage can be installed). Besides the float64 residual, the check
 reports `max_native_difference`: the host's own solve of the same state, which catches an assembly that differs from the
 matrix the host iterates with. A direct solve is only worth installing where the host's iteration is slow; measure first
 (see the numbers in `phost-coupledchol`'s README).
@@ -33,14 +35,15 @@ matrix the host iterates with. A direct solve is only worth installing where the
 * **observer**: reads state, writes only to its own buffer. Judged on matching its own definition, on not touching the
   state, and on cost.
 
-## What `check_impl` verifies for the three non-solver stages
+## What `check_impl` verifies for the stages that are not solver swaps
 
 Inputs unchanged; outputs finite; the same inputs give bitwise the same outputs; the law matches its float64 reference
 (`max_law_error` <= 1e-5); the host-side effect matches (`max_effect_error`); the runtime was called. For
 `dof.passive_force` that reports `damping`, each entry is 0 or the law's own -d force / d v, checked by central
 differences of the float64 reference one DOF at a time (`max_damping_error` <= 1e-4). Faults are tested: a wrong law,
 forgetting the scalar-DOF mask, writing an input, nondeterminism, NaN, an adapter that drops the effect, a probe that
-meddles with state, damping that is not the law's derivative.
+meddles with state, damping that is not the law's derivative. For `body.wrench`, `max_effect_error` is the host's `qfrc_smooth`
+against MuJoCo (C) for the same state and the wrench the runtime wrote.
 
 Every stage also gets `calls` from the host, not from the implementation: executions of the stage, counted on the
 device, so every replay of a captured graph counts (RK4 runs forward dynamics, and so the stage, four times a step).

@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
 from ._common import native_impl as _native, relative_error
@@ -105,7 +106,7 @@ def native_impl() -> Any:
 
 
 def register(registry: Registry) -> None:
-    registry.add_contract(CONTRACT)
+    registry.add_stage(SPEC)
     registry.add_impl(native_impl())
 
 
@@ -135,9 +136,9 @@ def _damping_error(damping, scalar, inputs, law) -> float:
     return max(relative_error(claimed, derivative, checked), relative_error(reported[..., ~on], 0.0 * reported[..., ~on]))
 
 
-def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, law=None) -> dict:
+def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, ctx=None) -> dict:
     """Metrics of one recorded call: the law against its reference, the host's effect against the law, and the reported
-    damping against the law's own velocity derivative. ``law(inputs)`` runs the float64 reference."""
+    damping against the law's own velocity derivative. ``ctx.law(inputs)`` runs the float64 reference."""
     import numpy as np
     force, scalar = call["outputs"]["force"], call["inputs"]["scalar"]
     out = dict(max_law_error=max(relative_error(force, reference["force"], scalar),
@@ -147,5 +148,9 @@ def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapp
         expected = np.where(np.asarray(scalar).astype(bool), np.asarray(force, np.float64), 0.0)
         out["max_effect_error"] = relative_error(delta, expected)
     damping = call["outputs"].get("damping")
+    law = getattr(ctx, "law", None)
     out["max_damping_error"] = 0.0 if damping is None or law is None else _damping_error(damping, scalar, call["inputs"], law)
     return out
+
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))

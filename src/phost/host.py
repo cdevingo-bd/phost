@@ -63,6 +63,20 @@ class Provision:
 
 
 @dataclass(frozen=True)
+class NativeTiming:
+    """How to time the host's own execution of a stage, so a tool can say how much of a step the stage is worth.
+
+    ``run(host)`` returns a function that executes the host's native version of the stage once on ``host.data`` (it must
+    be capturable into a graph and leave the data fit to run again), or None when the host cannot do that for this model.
+    ``enclosing`` is empty when the function is the stage itself. When the stage cannot run on its own it names the larger
+    phase that contains it (``run`` then times that), and the result is an upper bound.
+    """
+
+    run: Callable[["Host"], Callable[[], None] | None]
+    enclosing: str = ""
+
+
+@dataclass(frozen=True)
 class StageBinding:
     """How one host implements one stage contract.
 
@@ -71,12 +85,22 @@ class StageBinding:
     forwards every call that is not the host's owned model to ``original``. ``allowed`` is the set
     of extension names the implementation declared; the dispatch supplies only those.
     ``extensions`` lists the extensions this host can supply, by name, each as a ``Provision``.
+
+    The rest is what a tool needs to know about the stage on this host, as data:
+    ``applicable(host)`` returns why the stage cannot be installed on this host's model, or None (a session refuses with
+    that reason; a tool can list it for every scene without running anything).
+    ``native_timing`` says how to time the host's own version of the stage (see ``NativeTiming``).
+    ``oracle(host)`` is what a contract check calls after the host has run with an implementation installed: it measures what
+    the host did with the stage's outputs, from the host's own data, and returns the ``effect`` the stage's judge reads.
     """
 
     contract: StageContract
     point: PatchPoint
     make_dispatch: Callable[[Callable, Any, "Host", frozenset], Callable]
     extensions: Mapping[str, Provision] = field(default_factory=dict)
+    applicable: Callable[["Host"], str | None] | None = None
+    native_timing: NativeTiming | None = None
+    oracle: Callable[["Host"], Mapping[str, Any] | None] | None = None
 
 
 class Host(abc.ABC):
@@ -95,6 +119,11 @@ class Host(abc.ABC):
         if found is None:
             raise CapabilityError(f"host {self.info.name!r} has no stage {name!r}; it offers {sorted(self.stages())}")
         return found
+
+    def refusal(self, name: str) -> str | None:
+        """Why the stage cannot be installed on this host's model, or None. Reads attributes only: safe at any time."""
+        binding = self.stage(name)
+        return binding.applicable(self) if binding.applicable else None
 
     def native(self) -> Any:
         raise CapabilityError(f"host {self.info.name!r} does not expose native objects")

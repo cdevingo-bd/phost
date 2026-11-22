@@ -6,6 +6,7 @@ from typing import Iterable
 
 from .errors import ContractError
 from .impl import Impl
+from .judge import Judge, StageSpec
 from .stage import StageContract
 
 
@@ -13,6 +14,24 @@ class Registry:
     def __init__(self):
         self._contracts: dict[str, StageContract] = {}
         self._impls: dict[str, Impl] = {}
+        self._judges: dict[str, Judge] = {}
+
+    def add_stage(self, spec: StageSpec) -> StageSpec:
+        """Register a stage: its contract and how it is judged. Adding the same stage again changes nothing."""
+        self.add_contract(spec.contract)
+        old = self._judges.get(spec.contract.key)
+        if old is not None and old != spec.judge:
+            raise ContractError(f"stage {spec.contract.key} already registered with a different judge")
+        self._judges[spec.contract.key] = spec.judge
+        return spec
+
+    def judge(self, name: str, version: int | None = None) -> Judge:
+        contract = self.contract(name, version)
+        try:
+            return self._judges[contract.key]
+        except KeyError:
+            raise ContractError(f"stage {contract.key} has no judge registered: add it with Registry.add_stage(StageSpec(...)) "
+                                "so check_impl knows how to measure it") from None
 
     def add_contract(self, contract: StageContract) -> StageContract:
         old = self._contracts.get(contract.key)

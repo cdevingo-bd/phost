@@ -30,3 +30,20 @@ def relative_error(got, want, mask=None) -> float:
     scale = float(np.max(np.abs(want)))
     err = float(np.max(np.abs(got - want)))
     return err / scale if scale > 0 else err
+
+
+def padded_entries(port, array, run):
+    """The entries of a padded system port the contract defines.
+
+    A dimension written ``nv+`` is padded: only the leading ``nv`` entries mean anything. A port padded in both of its
+    last two dimensions is a symmetric matrix of which only the upper triangle is valid. Everything else is returned whole.
+    """
+    import numpy as np
+    array, nv = np.asarray(array), run["nv"]
+    padded = [isinstance(dim, str) and dim.endswith("+") for dim in port.shape]
+    if len(padded) >= 3 and padded[-1] and padded[-2]:
+        rows, cols = np.triu_indices(nv)
+        return array[:, rows, cols]
+    if padded and padded[-1]:
+        return array[:, :nv]
+    return array

@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .errors import CapabilityError, ContractError, GuardError
+from .errors import ApplicabilityError, CapabilityError, ContractError, GuardError
 from .host import Capability, Host, Provision, StageBinding
 from .impl import ImplKind
 from .meter import Metered
@@ -80,6 +80,9 @@ class Session:
         if Capability.PATCH not in self.host.capabilities:
             raise CapabilityError(f"host {self.host.info.name!r} cannot patch stages")
         binding = self.host.stage(selection.stage)
+        refusal = self.host.refusal(selection.stage)
+        if refusal:
+            raise ApplicabilityError(f"stage {selection.stage!r} cannot be installed on this host: {refusal}")
         if binding.contract.version != impl.stage_version:
             raise ContractError(
                 f"impl {impl.id!r} targets {impl.stage}@{impl.stage_version}, host offers {binding.contract.key}")

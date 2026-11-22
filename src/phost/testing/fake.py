@@ -115,7 +115,7 @@ class FakeHost(Host):
     def facts(self) -> ModelFacts:
         return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu",
                           extra=dict(nq=self.model.nq, nu=self.model.nu, nhistory=0,
-                                     scalar_dofs=int(self.model.scalar.sum()), effective_blocker=""))
+                                     scalar_dofs=int(self.model.scalar.sum())))
 
     def native(self) -> Any:
         return SimpleNamespace(model=self.model, data=self.data, ns=self.ns)

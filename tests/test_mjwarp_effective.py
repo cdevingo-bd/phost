@@ -66,7 +66,7 @@ def host():
 
 
 def test_the_flex_model_with_the_discrete_integrator_can_be_replaced(host):
-    assert host.facts().extra["effective_blocker"] == ""
+    assert host.refusal(es.NAME) is None
     assert host.facts().integrator == "discrete"
 
 
@@ -75,7 +75,7 @@ def test_the_flex_model_with_the_discrete_integrator_can_be_replaced(host):
     (PLAIN, "discrete", "no flex stiffness"),
 ])
 def test_a_model_the_host_solves_another_way_names_why(xml, integrator, words):
-    blocker = make_host(xml, integrator, nworld=1).facts().extra["effective_blocker"]
+    blocker = make_host(xml, integrator, nworld=1).refusal(es.NAME)
     assert words in blocker
 
 

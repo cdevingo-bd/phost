@@ -45,6 +45,7 @@ by `step`. Anything inside a kernel (a `wp.func` such as `_efc_row`) is not atta
 | `passive.passive` | public function, called once per forward | **built**: `dof.passive_force`, post-hook, model changing |
 | `forward.fwd_actuation` | function, called by `forward` and `step2` | **built**: `control.law`, pre-hook, model changing |
 | `forward.forward` | function, called by `step` (4 times under RK4) | **built**: `probe.state`, post-hook, observer |
+| `forward.xfrc_accumulate` | function imported into `forward`'s namespace, called once per `fwd_acceleration` as `xfrc_accumulate(m, d, d.qfrc_smooth)` | **built**: `body.wrench`, pre-hook, model changing; writes `d.xfrc_applied`, which the call maps through the Jacobians |
 | `smooth.solve_m`, `factor_solve_i` | functions on block-compressed CSR `M` with tile and LDL factors | not built: a contract needs the host to densify `M`; candidate exact stage |
 | `solver._linesearch` | private; inputs are per-row quadratic coefficients with branches for friction loss and elliptic cones | not built: the float64 reference must cover those branches; candidate approximate stage |
 | constraint softness (`_efc_row`, `_contact_kbimp`) | `wp.func` inlined in per-constraint kernels | not attachable; would need a post-pass over `efc.D`, `efc.aref` and per-row `solref`/`solimp` lookup |

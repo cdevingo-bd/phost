@@ -1,5 +1,7 @@
 """Stage ``effective.solve`` on the fake host: the contract is judged in float64 and against the host's own solve."""
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -70,17 +72,17 @@ def test_another_model_is_solved_by_the_host_and_never_reaches_the_runtime(regis
     assert es.native_difference(run["effect"]["qacc"], run["effect"]["expected"]) < 1e-6
 
 
-def test_a_host_that_reports_a_blocker_refuses_an_implementation_that_checks_it(registry):
-    def applicable(facts):
-        return facts.extra.get("effective_blocker") or None
-    registry.add_impl(make(runtimes.EffectiveReferenceRuntime, "checked", applicable=applicable))
+def test_a_host_that_refuses_the_stage_refuses_every_implementation_of_it(registry):
     host = FakeHost()
-    with Session(host, [Selection(es.NAME, "test/checked")], registry):
-        pass                                                           # the fake host reports no blocker
+    assert host.refusal(es.NAME) is None
+    with Session(host, [Selection(es.NAME, "test/reference")], registry):
+        pass                                                           # the fake host can take the stage
     blocked = FakeHost()
-    blocked.facts = lambda: type(host.facts())(**{**vars(host.facts()), "extra": {"effective_blocker": "has a fluid term"}})
-    with pytest.raises(ApplicabilityError, match="has a fluid term"):
-        with Session(blocked, [Selection(es.NAME, "test/checked")], registry):
+    binding = blocked.stage(es.NAME)
+    blocked.stages()[es.NAME] = dataclasses.replace(binding, applicable=lambda h: "has a fluid term")
+    assert blocked.refusal(es.NAME) == "has a fluid term"
+    with pytest.raises(ApplicabilityError, match="cannot be installed on this host: has a fluid term"):
+        with Session(blocked, [Selection(es.NAME, "test/reference")], registry):
             pass
 
 

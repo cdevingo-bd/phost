@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
 from ..impl import Impl, ImplKind
+from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import (CALLS, Extension, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance)
+from ._common import padded_entries
 
 NAME = "newton.linear_solve"
 
@@ -104,7 +106,7 @@ def native_impl(registry_id: str = "native") -> Impl:
 
 
 def register(registry: Registry) -> None:
-    registry.add_contract(CONTRACT)
+    registry.add_stage(SPEC)
     registry.add_impl(native_impl())
 
 
@@ -155,3 +157,13 @@ def evaluate(inputs: Mapping[str, Any], outputs: Mapping[str, Any], nv: int) -> 
         e2 = abs(decr[w] - want_dec) / max(abs(want_dec), 1e-300)
         invariant = max(invariant, e1, e2) if np.isfinite(e1) and np.isfinite(e2) else float("inf")
     return dict(max_relative_residual=float(residual), max_invariant_error=float(invariant), worlds_judged=judged)
+
+
+def _judge_evaluate(call, reference, effect, ctx) -> dict:
+    return evaluate(call["inputs"], call["outputs"], ctx.nv)
+
+
+# The driver observes the host's hook itself (the inputs are built per host call, with inactive worlds), hence ``driven``.
+SPEC = StageSpec(CONTRACT, Judge(
+    evaluate=_judge_evaluate, defined=padded_entries, driven=True,
+    calls=lambda host: [{}, {"active": [1, 0] + [1] * (host.data.nworld - 2)}, {"skip_unchanged": True, "skip_noflip": True}]))

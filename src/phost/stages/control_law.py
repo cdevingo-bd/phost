@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
+from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
 from ._common import native_impl as _native, relative_error
@@ -71,12 +72,15 @@ def native_impl() -> Any:
 
 
 def register(registry: Registry) -> None:
-    registry.add_contract(CONTRACT)
+    registry.add_stage(SPEC)
     registry.add_impl(native_impl())
 
 
-def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, law=None) -> dict:
+def evaluate(call: Mapping[str, Any], reference: Mapping[str, Any], effect: Mapping[str, Any] | None, ctx=None) -> dict:
     out = dict(max_law_error=relative_error(call["outputs"]["ctrl"], reference["ctrl"]))
     if effect is not None:
         out["max_effect_error"] = relative_error(effect["actuator_force"], effect["expected_actuator_force"])
     return out
+
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=evaluate, repeatable=True))

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from ..registry import Registry
-from . import control_law, dof_passive_force, effective_solve, newton_linear, probe_state
+from . import body_wrench, control_law, dof_passive_force, effective_solve, newton_linear, probe_state
 
-MODULES = (newton_linear, effective_solve, dof_passive_force, control_law, probe_state)
+MODULES = (newton_linear, effective_solve, dof_passive_force, control_law, probe_state, body_wrench)
 
 
 def register_all(registry: Registry) -> None:

@@ -8,9 +8,9 @@ the contract types, one guarded and scoped install rule, a session that applies 
 implementations to a host, a registry that describes itself as JSON, and a contract check that
 judges an implementation against a float64 reference.
 
-Today: five stages (two exact solver swaps, a passive force law, a controller and a probe; see
+Today: six stages (two exact solver swaps, a passive force law, a controller, a body force and a probe; see
 [docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, and a simulator-free fake host.
-The core has no required dependencies. See [docs/SPEC.md](docs/SPEC.md).
+The core has no required dependencies. See [docs/SPEC.md](docs/SPEC.md); to add a stage, [docs/ADDING_A_STAGE.md](docs/ADDING_A_STAGE.md).
 
 ## How it fits together
 

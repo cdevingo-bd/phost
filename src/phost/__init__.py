@@ -6,8 +6,9 @@ packages that implement stages.
 
 from .errors import ApplicabilityError, CapabilityError, ContractError, GuardError, PhostError
 from .guard import Guard, source_hash
-from .host import Capability, Host, HostInfo, ModelFacts, Provision, StageBinding
+from .host import Capability, Host, HostInfo, ModelFacts, NativeTiming, Provision, StageBinding
 from .impl import Impl, ImplKind, ParamSpec, StageRuntime
+from .judge import Judge, StageSpec
 from .meter import Meter, PythonMeter
 from .patch import PatchPoint, Target, install, original_of
 from .registry import Registry, default
@@ -18,7 +19,7 @@ __version__ = "0.1.0.dev0"
 
 __all__ = [
     "ApplicabilityError", "CapabilityError", "ContractError", "GuardError", "PhostError", "Guard", "source_hash",
-    "Capability", "Host", "HostInfo", "ModelFacts", "Provision", "StageBinding", "Impl", "ImplKind", "ParamSpec", "StageRuntime",
+    "Capability", "Host", "HostInfo", "ModelFacts", "NativeTiming", "Provision", "StageBinding", "Judge", "StageSpec", "Impl", "ImplKind", "ParamSpec", "StageRuntime",
     "PatchPoint", "Target", "install", "original_of", "Registry", "default", "Selection", "Session", "Extension", "MetricSpec",
     "Port", "Role", "StageContract", "SwapClass", "Tolerance", "check_ports", "CALLS", "Meter", "PythonMeter",
 ]

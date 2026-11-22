@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from ..impl import Impl, ImplKind
+from ..judge import Judge, StageSpec
 from ..registry import Registry
 from ..stage import CALLS, MetricSpec, Port, Role, StageContract, SwapClass, Tolerance
+from ._common import padded_entries
 
 NAME = "effective.solve"
 
@@ -87,7 +89,7 @@ def native_impl(registry_id: str = "native") -> Impl:
 
 
 def register(registry: Registry) -> None:
-    registry.add_contract(CONTRACT)
+    registry.add_stage(SPEC)
     registry.add_impl(native_impl())
 
 
@@ -134,3 +136,15 @@ def evaluate(inputs: Mapping[str, Any], outputs: Mapping[str, Any], nv: int) -> 
         rel = err / bnorm if bnorm > 0 else (0.0 if err == 0 else float("inf"))
         worst = max(worst, rel) if np.isfinite(rel) else float("inf")
     return dict(max_relative_residual=float(worst), worlds_judged=int(h.shape[0]))
+
+
+def _judge_evaluate(call, reference, effect, ctx) -> dict:
+    """The residual of the runtime's solution, and (when the driver measured the host's own solve of the same state) how far
+    it is from that."""
+    out = evaluate(call["inputs"], call["outputs"], ctx.nv)
+    if effect is not None:
+        out["max_native_difference"] = native_difference(effect["qacc"], effect["expected"])
+    return out
+
+
+SPEC = StageSpec(CONTRACT, Judge(evaluate=_judge_evaluate, defined=padded_entries))
