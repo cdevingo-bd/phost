@@ -19,6 +19,7 @@ means swapping an implementation.
 | Contracts `dof.passive_force`, `control.law`, `probe.state` (see [CATALOG.md](CATALOG.md)) | `stages/` | numpy for evaluation |
 | Built-in implementations of those three, numpy and Warp backends, each with its float64 reference | `impls/` | numpy, warp |
 | MuJoCo Warp and MJLab adapters (what each stage relies on: [MJWARP_STEP.md](MJWARP_STEP.md)) | `hosts/mjwarp.py` | warp, mujoco_warp |
+| A host that is not MuJoCo-shaped: a spring-mass chain in NumPy, with passive force, control, probe and a banded effective solve | `hosts/chain.py` | numpy |
 | Stage dispatch as data (`Hook`), shared by every host | `hook.py` | stdlib |
 | The nonzero structure of a system matrix, as a host-provided extension | `sparsity.py` | stdlib |
 | Simulator-free fake host, faulty runtimes, `check_impl` | `testing/` | numpy |

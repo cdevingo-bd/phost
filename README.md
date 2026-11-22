@@ -9,7 +9,8 @@ contract and never against the host. A session installs it for the length of a `
 function's source is one that has been reviewed, and removes it on every way out. `check_impl` runs an implementation on a real
 host and judges it against a float64 reference.
 
-Six stages today (see [docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, and a simulator-free fake host. The
+Six stages today (see [docs/CATALOG.md](docs/CATALOG.md)), MuJoCo Warp and MJLab adapters, a simulator-free fake host, and a NumPy spring-mass chain that is a host in its own right
+(`phost.hosts.chain`: no MuJoCo, no GPU, its own vocabulary, and a banded effective system). The
 core has no required dependencies. [docs/SPEC.md](docs/SPEC.md) is the specification;
 [docs/ADDING_A_STAGE.md](docs/ADDING_A_STAGE.md) is how to add a stage.
 

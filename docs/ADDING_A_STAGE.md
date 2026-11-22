@@ -95,6 +95,19 @@ module, as `fake_body_wrench.py` is) gives the stage to the fake host with numpy
 A binding's `oracle` is what makes this work for any stage: the fake host's driver has no stage names in it either. What
 `Launch` names runs as a Python function on the fake host (`fake.KERNELS`) and as a Warp kernel on the GPU host.
 
+## A host that is not MuJoCo
+
+`phost.hosts.chain.ChainHost` is a real simulator, a damped spring-mass chain in NumPy, and it takes the same tables: its
+arrays are `x`, `v`, `a`, `t` and `command`, its model has `particle_scalar` where MuJoCo has `dof_*`, and each `Hook` in
+`hosts/chain.py` says where a port comes from in those names. Its effective system is tridiagonal, so the `sparsity` extension
+it hands out is `Sparsity.banded(n, 1)`, and its `implicit_damping` is a wrapper around its own assembly rather than around
+an integrator. It offers four of the six stages and not `body.wrench` or `newton.linear_solve`: a host offers what it has.
+The one thing a table assumes of a host is that the function it hooks is called as `f(model, data, *args)`.
+
+A stage you add runs on the chain host if its binding is one more factory in `_BINDINGS`; whether it should depends on
+whether the stage means anything for a chain. `tests/test_chain_host.py` runs the shipped implementations and the contract
+checker on it, and `phost-author`'s `tests/test_chain_forms.py` runs typed equations on it.
+
 ## Structure of the system matrix
 
 A stage whose port is a matrix can offer the `sparsity` extension (`effective.solve` does). An implementation that declares
