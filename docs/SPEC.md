@@ -1,6 +1,6 @@
 # phost: design (matches the code)
 
-phost is the layer between a physics host (MuJoCo Warp, MJLab, others later) and anything that
+phost is the layer between a physics host (MuJoCo Warp, MJLab, a NumPy chain, a JAX chain; others can be added) and anything that
 replaces one of the host's stages. A stage is a named step with a typed contract. An
 implementation of a stage is written against the contract, never against a host. A host adapter
 maps its own function onto the contract. Swapping hosts means swapping an adapter; swapping math
@@ -20,6 +20,7 @@ means swapping an implementation.
 | Built-in implementations of those three, numpy and Warp backends, each with its float64 reference | `impls/` | numpy, warp |
 | MuJoCo Warp and MJLab adapters (what each stage relies on: [MJWARP_STEP.md](MJWARP_STEP.md)) | `hosts/mjwarp.py` | warp, mujoco_warp |
 | A host that is not MuJoCo-shaped: a spring-mass chain in NumPy, with passive force, control, probe and a banded effective solve | `hosts/chain.py` | numpy |
+| The same chain over JAX arrays, which cannot be written in place: the step compiles | `hosts/jaxchain.py` | jax |
 | Stage dispatch as data (`Hook`), shared by every host | `hook.py` | stdlib |
 | The nonzero structure of a system matrix, as a host-provided extension | `sparsity.py` | stdlib |
 | Simulator-free fake host, faulty runtimes, `check_impl` | `testing/` | numpy |
@@ -105,7 +106,7 @@ stand-in object, not against a real MJLab.
 
 ## Not built yet
 
-* More stages. Five contracts exist; the audit in [MJWARP_STEP.md](MJWARP_STEP.md) lists what else the step
+* More stages. Six contracts exist; the audit in [MJWARP_STEP.md](MJWARP_STEP.md) lists what else the step
   offers and why it is not built (mass-matrix solve, line search, constraint softness, collision, integrators).
   The graph spec, scene registry, isolated runner and CLI live in the sibling package `phost-lab`.
 * Authoring lives in the sibling package `phost-author`: typed equations for the two law stages, and a sandbox
@@ -116,5 +117,5 @@ stand-in object, not against a real MJLab.
 ## Roadmap
 
 1. **Headless lab:** done, in `phost-lab`.
-2. **Stage catalog:** done for five stages (see [CATALOG.md](CATALOG.md)).
+2. **Stage catalog:** done for six stages (see [CATALOG.md](CATALOG.md)).
 3. **Authoring:** done, in `phost-author` (typed equations; sandboxed kernel submissions).

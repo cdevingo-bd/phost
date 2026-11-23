@@ -27,7 +27,7 @@ matrix the host iterates with. A direct solve is only worth installing where the
 ## What the swap class means
 
 * **exact**: same math, a different algorithm. Judged against the stage's reference to a tolerance, and on speed.
-* **approximate**: same math to a bounded error. Judged on a speed and error front. (No stage uses it yet.)
+* **approximate**: same math to a bounded error. Judged on a speed and error front. (An implementation of an exact stage may declare itself approximate: a typed solver step does, and is ranked on speed and error.)
 * **model changing**: different physics. It cannot be compared with the host, because the host is not the truth; it is
   judged against its own float64 law (the implementation supplies it, and the registry refuses an implementation
   that does not) and against the effect it has on the host (the host's passive force changed by exactly the law;

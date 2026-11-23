@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 852" width="1000" height="852" role="img" aria-labelledby="ttl dsc">
-<title id="ttl">Where phost attaches to MuJoCo Warp's step, and how an implementation is checked</title>
-<desc id="dsc">Panel 1: the MuJoCo Warp step as six functions with six numbered splice points, and a table of what each splice reads and writes. Panel 2: one splice: derive the contract's ports from the host's device arrays, call the implementation, write back, with a source-hash guard and a scoped install. Panel 3: the contract check against a float64 reference, and the lab, score and dashboard that time, judge and show a graph.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 790" width="1000" height="790" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">phost: stage contracts between a simulator and the implementations that replace its parts</title>
+<desc id="dsc">Left: implementations (typed equations and sandboxed kernels from phost-author, the coupled-block Cholesky, built-in laws, your own) are written against a stage contract. Middle: the contract (ports, swap class, metrics and tolerances, a float64 reference, a judge) and the six stages that exist. Right: host adapters map a simulator's own function onto the contract: MuJoCo Warp, MJLab, a NumPy chain, a JAX chain, a fake host, or yours. Below: a session installs an implementation for a with-block behind a source guard, and check_impl judges it against the float64 reference. Lab, score, dash and agent build on that.</desc>
 <style>
   :root { --bg:#ffffff; --ink:#1b1b1a; --ink2:#4a4945; --muted:#66645f; --line:#8c8a84; --rule:#d6d5cf;
-          --host:#efeeea; --accent:#1f5fbf; --accentfill:#e8f0fb; --onaccent:#ffffff; }
+          --host:#efeeea; --accent:#1f5fbf; --accentfill:#e8f0fb; --onaccent:#ffffff; --warn:#8a4b00; }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#161615; --ink:#ecebe7; --ink2:#c2c1ba; --muted:#8f8d86; --line:#77756f; --rule:#34332f;
-            --host:#242422; --accent:#6ea2f0; --accentfill:#1b2a40; --onaccent:#0d1726; }
+            --host:#242422; --accent:#6ea2f0; --accentfill:#1b2a40; --onaccent:#0d1726; --warn:#e0a458; }
   }
   text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); font-size: 12px; }
   .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
@@ -18,231 +18,172 @@
   .bold { font-weight: 700; }
   .acc { fill: var(--accent); }
   .mut { fill: var(--muted); }
+  .warn { fill: var(--warn); }
   .box { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
   .hostbox { fill: var(--host); stroke: var(--line); stroke-width: 1; }
-  .phostbox { fill: var(--accentfill); stroke: var(--accent); stroke-width: 1; }
+  .corebox { fill: var(--accentfill); stroke: var(--accent); stroke-width: 1; }
+  .ownbox { fill: var(--bg); stroke: var(--accent); stroke-width: 1.4; }
+  .yours { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+  .frame { fill: none; stroke: var(--rule); stroke-width: 1; }
   .rule { stroke: var(--rule); stroke-width: 1; fill: none; }
   .ln { stroke: var(--line); stroke-width: 1; fill: none; }
   .arrow { stroke: var(--ink2); stroke-width: 1.2; fill: none; marker-end: url(#h); }
   .aarrow { stroke: var(--accent); stroke-width: 1.2; fill: none; marker-end: url(#ha); }
-  .leader { stroke: var(--accent); stroke-width: 1; fill: none; }
+  .back { stroke: var(--muted); stroke-width: 1; fill: none; stroke-dasharray: 3 3; marker-end: url(#h); }
   .badge { fill: var(--accent); }
   .badgetx { fill: var(--onaccent); font-size: 10.5px; font-weight: 700; text-anchor: middle; }
 </style>
 <defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--ink2)"/></marker><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--accent)"/></marker></defs>
-<rect x="0" y="0" width="1000" height="852" class=""/>
-<rect x="0" y="0" width="1000" height="852" style="fill:var(--bg)"/>
-<text x="24" y="28" class="title" text-anchor="start">phost: where an implementation attaches to MuJoCo Warp's step, and how it is checked</text>
-<text x="976" y="28" class="tag mono" text-anchor="end">reviewed build: mujoco_warp 3.17.0</text>
-<text x="24" y="62" class="head" text-anchor="start">1  The host step</text>
-<text x="150" y="62" class="sub" text-anchor="start">mjw.step(m, d), captured as one CUDA graph. Gray boxes are the host's functions; numbered squares are where phost can splice.</text>
-<line x1="24.0" y1="88" x2="831.2" y2="88" class="ln"/>
-<line x1="24.0" y1="88" x2="24.0" y2="95" class="ln"/>
-<line x1="831.2" y1="88" x2="831.2" y2="95" class="ln"/>
-<text x="427.6" y="83" class="small mono" text-anchor="middle">forward(m, d)</text>
-<rect x="24.0" y="108" width="148" height="58" class="hostbox"/>
-<text x="33.0" y="127" class="mono bold" text-anchor="start">fwd_position</text>
-<text x="33.0" y="144" class="small mono" text-anchor="start">kinematics, crb</text>
-<text x="33.0" y="158" class="small mono" text-anchor="start">collision, efc rows</text>
-<rect x="188.8" y="108" width="148" height="58" class="hostbox"/>
-<text x="197.8" y="127" class="mono bold" text-anchor="start">fwd_velocity</text>
-<text x="197.8" y="144" class="small mono" text-anchor="start">com_vel, rne</text>
-<text x="197.8" y="158" class="small mono" text-anchor="start">passive.passive</text>
-<rect x="353.6" y="108" width="148" height="58" class="hostbox"/>
-<text x="362.6" y="127" class="mono bold" text-anchor="start">fwd_actuation</text>
-<text x="362.6" y="144" class="small mono" text-anchor="start">actuator_force</text>
-<text x="362.6" y="158" class="small mono" text-anchor="start">-&gt; qfrc_actuator</text>
-<rect x="518.4000000000001" y="108" width="148" height="58" class="hostbox"/>
-<text x="527.4000000000001" y="127" class="mono bold" text-anchor="start">fwd_acceleration</text>
-<text x="527.4000000000001" y="144" class="small mono" text-anchor="start">xfrc_accumulate</text>
-<text x="527.4000000000001" y="158" class="small mono" text-anchor="start">M^-1 qfrc_smooth</text>
-<rect x="683.2" y="108" width="148" height="58" class="hostbox"/>
-<text x="692.2" y="127" class="mono bold" text-anchor="start">solver.solve</text>
-<text x="692.2" y="144" class="small mono" text-anchor="start">Newton: build H,</text>
-<text x="692.2" y="158" class="small mono" text-anchor="start">factor, line search</text>
-<rect x="848.0" y="108" width="148" height="58" class="hostbox"/>
-<text x="857.0" y="127" class="mono bold" text-anchor="start">integrator</text>
-<text x="857.0" y="144" class="small mono" text-anchor="start">euler | rk4 |</text>
-<text x="857.0" y="158" class="small mono" text-anchor="start">implicit | discrete</text>
-<path d="M173.0,137.0 H187.8" class="arrow"/>
-<path d="M337.8,137.0 H352.6" class="arrow"/>
-<path d="M502.6,137.0 H517.4000000000001" class="arrow"/>
-<path d="M667.4000000000001,137.0 H682.2" class="arrow"/>
-<path d="M832.2,137.0 H847.0" class="arrow"/>
-<line x1="375.6" y1="107" x2="375.6" y2="95" class="leader"/>
-<rect x="367.6" y="79" width="16" height="16" class="badge"/>
-<text x="375.6" y="91" class="badgetx">1</text>
-<line x1="210.8" y1="167" x2="210.8" y2="179" class="leader"/>
-<rect x="202.8" y="179" width="16" height="16" class="badge"/>
-<text x="210.8" y="191" class="badgetx">2</text>
-<line x1="540.4000000000001" y1="107" x2="540.4000000000001" y2="95" class="leader"/>
-<rect x="532.4000000000001" y="79" width="16" height="16" class="badge"/>
-<text x="540.4000000000001" y="91" class="badgetx">3</text>
-<line x1="540.4000000000001" y1="167" x2="540.4000000000001" y2="179" class="leader"/>
-<rect x="532.4000000000001" y="179" width="16" height="16" class="badge"/>
-<text x="540.4000000000001" y="191" class="badgetx">4</text>
-<line x1="705.2" y1="167" x2="705.2" y2="179" class="leader"/>
-<rect x="697.2" y="179" width="16" height="16" class="badge"/>
-<text x="705.2" y="191" class="badgetx">5</text>
-<line x1="809.2" y1="107" x2="809.2" y2="95" class="leader"/>
-<rect x="801.2" y="79" width="16" height="16" class="badge"/>
-<text x="809.2" y="91" class="badgetx">6</text>
-<text x="24" y="214" class="tag mono" text-anchor="start">#</text>
-<text x="48" y="214" class="tag mono" text-anchor="start">stage</text>
-<text x="190" y="214" class="tag mono" text-anchor="start">hooked function</text>
-<text x="418" y="214" class="tag mono" text-anchor="start">runs</text>
-<text x="474" y="214" class="tag mono" text-anchor="start">ports in</text>
-<text x="654" y="214" class="tag mono" text-anchor="start">ports out</text>
-<text x="858" y="214" class="tag mono" text-anchor="start">swap class</text>
-<line x1="24" y1="221" x2="976" y2="221" class="rule"/>
-<rect x="24" y="228" width="16" height="16" class="badge"/>
-<text x="32" y="240" class="badgetx">1</text>
-<text x="56" y="240" class="mono bold small" text-anchor="start">control.law</text>
-<text x="190" y="240" class="mono small" text-anchor="start">forward.fwd_actuation</text>
-<text x="418" y="240" class="mono small" text-anchor="start">before</text>
-<text x="474" y="240" class="mono small" text-anchor="start">length, velocity, time</text>
-<text x="654" y="240" class="mono small" text-anchor="start">ctrl</text>
-<text x="858" y="240" class="small" text-anchor="start">model changing</text>
-<line x1="24" y1="248" x2="976" y2="248" class="rule"/>
-<rect x="24" y="250" width="16" height="16" class="badge"/>
-<text x="32" y="262" class="badgetx">2</text>
-<text x="56" y="262" class="mono bold small" text-anchor="start">dof.passive_force</text>
-<text x="190" y="262" class="mono small" text-anchor="start">passive.passive</text>
-<text x="418" y="262" class="mono small" text-anchor="start">after</text>
-<text x="474" y="262" class="mono small" text-anchor="start">q, v, time</text>
-<text x="654" y="262" class="mono small" text-anchor="start">force (+= qfrc_passive)</text>
-<text x="858" y="262" class="small" text-anchor="start">model changing</text>
-<line x1="24" y1="270" x2="976" y2="270" class="rule"/>
-<rect x="24" y="272" width="16" height="16" class="badge"/>
-<text x="32" y="284" class="badgetx">3</text>
-<text x="56" y="284" class="mono bold small" text-anchor="start">body.wrench</text>
-<text x="190" y="284" class="mono small" text-anchor="start">forward.xfrc_accumulate</text>
-<text x="418" y="284" class="mono small" text-anchor="start">before</text>
-<text x="474" y="284" class="mono small" text-anchor="start">xpos, cvel, time</text>
-<text x="654" y="284" class="mono small" text-anchor="start">wrench (d.xfrc_applied)</text>
-<text x="858" y="284" class="small" text-anchor="start">model changing</text>
-<line x1="24" y1="292" x2="976" y2="292" class="rule"/>
-<rect x="24" y="294" width="16" height="16" class="badge"/>
-<text x="32" y="306" class="badgetx">4</text>
-<text x="56" y="306" class="mono bold small" text-anchor="start">effective.solve</text>
-<text x="190" y="306" class="mono small" text-anchor="start">derivative.eff_solve</text>
-<text x="418" y="306" class="mono small" text-anchor="start">instead</text>
-<text x="474" y="306" class="mono small" text-anchor="start">h, rhs</text>
-<text x="654" y="306" class="mono small" text-anchor="start">qacc</text>
-<text x="858" y="306" class="small" text-anchor="start">exact</text>
-<line x1="24" y1="314" x2="976" y2="314" class="rule"/>
-<rect x="24" y="316" width="16" height="16" class="badge"/>
-<text x="32" y="328" class="badgetx">5</text>
-<text x="56" y="328" class="mono bold small" text-anchor="start">newton.linear_solve</text>
-<text x="190" y="328" class="mono small" text-anchor="start">solver._cholesky_factorize_solve</text>
-<text x="418" y="328" class="mono small" text-anchor="start">instead</text>
-<text x="474" y="328" class="mono small" text-anchor="start">h, grad, active, refactor</text>
-<text x="654" y="328" class="mono small" text-anchor="start">search, search_dot, decrement</text>
-<text x="858" y="328" class="small" text-anchor="start">exact</text>
-<line x1="24" y1="336" x2="976" y2="336" class="rule"/>
-<rect x="24" y="338" width="16" height="16" class="badge"/>
-<text x="32" y="350" class="badgetx">6</text>
-<text x="56" y="350" class="mono bold small" text-anchor="start">probe.state</text>
-<text x="190" y="350" class="mono small" text-anchor="start">forward.forward</text>
-<text x="418" y="350" class="mono small" text-anchor="start">after</text>
-<text x="474" y="350" class="mono small" text-anchor="start">qpos, qvel, qacc, time</text>
-<text x="654" y="350" class="mono small" text-anchor="start">value (a buffer it owns)</text>
-<text x="858" y="350" class="small" text-anchor="start">observer</text>
-<line x1="24" y1="358" x2="976" y2="358" class="rule"/>
-<text x="24" y="376" class="small" text-anchor="start">Stage 4 exists only under the discrete integrator, which bypasses stages 1 and 2; stage 1 needs actuators. phost-lab applicability prints the full stage-by-scene table.</text>
-<text x="24" y="412" class="head" text-anchor="start">2  One splice</text>
-<text x="124" y="412" class="sub" text-anchor="start">what a Hook does when the host reaches the hooked function</text>
-<rect x="24" y="430" width="150" height="70" class="hostbox"/>
-<text x="33" y="449" class="mono bold small" text-anchor="start">host arrays</text>
-<text x="33" y="467" class="small" text-anchor="start">device, float32</text>
-<text x="33" y="481" class="small" text-anchor="start">qvel, xpos, M, efm_*</text>
-<rect x="194" y="430" width="190" height="70" class="phostbox"/>
-<text x="203" y="449" class="mono bold small" text-anchor="start">derive the ports</text>
-<text x="203" y="467" class="small" text-anchor="start">alias an array, or launch one</text>
-<text x="203" y="481" class="small" text-anchor="start">kernel (Launch) to build it</text>
-<rect x="404" y="430" width="232" height="70" class="phostbox"/>
-<text x="413" y="449" class="mono bold small" text-anchor="start">runtime.entry(system)</text>
-<text x="413" y="467" class="small" text-anchor="start">the implementation's Warp kernels,</text>
-<text x="413" y="481" class="small" text-anchor="start">on the host's stream, in the graph</text>
-<rect x="656" y="430" width="150" height="70" class="phostbox"/>
-<text x="665" y="449" class="mono bold small" text-anchor="start">write back</text>
-<text x="665" y="467" class="small" text-anchor="start">into the host's arrays</text>
-<text x="665" y="481" class="small" text-anchor="start">(Zero / Launch steps)</text>
-<rect x="826" y="430" width="150" height="70" class="hostbox"/>
-<text x="835" y="449" class="mono bold small" text-anchor="start">host function</text>
-<text x="835" y="467" class="small" text-anchor="start">runs after, runs before,</text>
-<text x="835" y="481" class="small" text-anchor="start">or is skipped (instead)</text>
-<path d="M175,465.0 H193" class="aarrow"/>
-<path d="M385,465.0 H403" class="aarrow"/>
-<path d="M637,465.0 H655" class="aarrow"/>
-<path d="M807,465.0 H825" class="arrow"/>
-<text x="194" y="514" class="tag mono" text-anchor="start">phost</text>
-<text x="404" y="514" class="tag mono" text-anchor="start">phost-author, -coupledchol, yours</text>
-<text x="24" y="514" class="tag mono" text-anchor="start">MuJoCo Warp</text>
-<text x="826" y="514" class="tag mono" text-anchor="start">MuJoCo Warp</text>
-<text x="656" y="514" class="tag mono" text-anchor="start">phost</text>
-<text x="24" y="538" class="mono bold small" text-anchor="start">guard</text>
-<text x="78" y="538" class="small" text-anchor="start">The hooked function's source hash must be in the reviewed table for this build, or the session refuses to install.</text>
-<text x="24" y="556" class="mono bold small" text-anchor="start">scope</text>
-<text x="78" y="556" class="small" text-anchor="start">The patch holds for the length of a with-block and is removed on every way out of it, including an exception.</text>
-<text x="24" y="574" class="mono bold small" text-anchor="start">meter</text>
-<text x="78" y="574" class="small" text-anchor="start">Calls are counted on the device, so every replay of a captured graph counts (RK4 runs the forward pass four times).</text>
-<text x="24" y="612" class="head" text-anchor="start">3  Check, then measure</text>
-<text x="190" y="612" class="sub" text-anchor="start">the same contract gates a submission, a graph run and a leaderboard entry</text>
-<text x="24" y="642" class="mono bold small" text-anchor="start">check_impl</text>
-<text x="24" y="656" class="tag mono" text-anchor="start">phost</text>
-<rect x="96" y="630" width="170" height="52" class="phostbox"/>
-<text x="105" y="648" class="mono bold small" text-anchor="start">drive the host</text>
-<text x="105" y="663" class="small" text-anchor="start">a real step on a scene;</text>
-<text x="105" y="676" class="small" text-anchor="start">each runtime call recorded</text>
-<rect x="300" y="630" width="170" height="52" class="phostbox"/>
-<text x="309" y="648" class="mono bold small" text-anchor="start">runtime output</text>
-<text x="309" y="663" class="small" text-anchor="start">float32, as the device</text>
-<text x="309" y="676" class="small" text-anchor="start">wrote it</text>
-<rect x="496" y="630" width="186" height="52" class="phostbox"/>
-<text x="505" y="648" class="mono bold small" text-anchor="start">float64 reference</text>
-<text x="505" y="663" class="small" text-anchor="start">same inputs, in NumPy; shipped</text>
-<text x="505" y="676" class="small" text-anchor="start">with the stage or the impl's own</text>
-<rect x="708" y="630" width="268" height="52" class="phostbox"/>
-<text x="717" y="648" class="mono bold small" text-anchor="start">judge, then gate</text>
-<text x="717" y="663" class="small" text-anchor="start">metrics (residual, law error, effect</text>
-<text x="717" y="676" class="small" text-anchor="start">error) within the contract's tolerances</text>
-<path d="M267,656 H299" class="arrow"/>
-<path d="M471,656 H495" class="arrow"/>
-<path d="M683,656 H707" class="arrow"/>
-<text x="96" y="698" class="tag" text-anchor="start">also checked: inputs unchanged, outputs finite; a law stage must repeat bitwise</text>
-<text x="24" y="730" class="mono bold small" text-anchor="start">phost-lab</text>
-<text x="24" y="744" class="tag mono" text-anchor="start">runs graphs</text>
-<rect x="96" y="718" width="150" height="52" class="box"/>
-<text x="105" y="736" class="mono bold small" text-anchor="start">graph + scene</text>
-<text x="105" y="751" class="small" text-anchor="start">JSON: which impl on</text>
-<text x="105" y="764" class="small" text-anchor="start">which stage, which scene</text>
-<rect x="270" y="718" width="238" height="52" class="box"/>
-<text x="279" y="736" class="mono bold small" text-anchor="start">isolated worker</text>
-<text x="279" y="751" class="small" text-anchor="start">capture the step as a CUDA graph;</text>
-<text x="279" y="764" class="small" text-anchor="start">N launches x repeats; native + control</text>
-<rect x="532" y="718" width="214" height="52" class="box"/>
-<text x="541" y="736" class="mono bold small" text-anchor="start">result</text>
-<text x="541" y="751" class="small" text-anchor="start">step ms, speedup, accuracy</text>
-<text x="541" y="764" class="small" text-anchor="start">against the native control</text>
-<rect x="770" y="718" width="206" height="52" class="box"/>
-<text x="779" y="736" class="mono bold small" text-anchor="start">phost-score</text>
-<text x="779" y="751" class="small" text-anchor="start">gates by swap class; hash-chained</text>
-<text x="779" y="764" class="small" text-anchor="start">ledger; Pareto board</text>
-<path d="M247,744 H269" class="arrow"/>
-<path d="M509,744 H531" class="arrow"/>
-<path d="M747,744 H769" class="arrow"/>
-<text x="24" y="796" class="mono bold small" text-anchor="start">lab diagnostics</text>
-<text x="24" y="810" class="tag" text-anchor="start">no implementation needed</text>
-<rect x="190" y="784" width="160" height="22" class="box"/>
-<text x="198" y="799" class="mono bold small" text-anchor="start">profile</text>
-<text x="252.9" y="799" class="small" text-anchor="start">per-phase graphs</text>
-<rect x="364" y="784" width="290" height="22" class="box"/>
-<text x="372" y="799" class="mono bold small" text-anchor="start">opportunities</text>
-<text x="467.1" y="799" class="small" text-anchor="start">native share; ceiling 1/(1-share)</text>
-<rect x="668" y="784" width="230" height="22" class="box"/>
-<text x="676" y="799" class="mono bold small" text-anchor="start">applicability</text>
-<text x="771.1" y="799" class="small" text-anchor="start">stage x scene, why not</text>
-<line x1="24" y1="824" x2="976" y2="824" class="rule"/>
-<text x="24" y="842" class="small" text-anchor="start">phost-dash is the browser front end over panels 2 and 3 and runs no GPU work itself; the workers do. Six repositories, all MIT.</text>
+<rect x="0" y="0" width="1000" height="790" style="fill:var(--bg)"/>
+<text x="24" y="28" class="title" text-anchor="start">phost: stage contracts between a simulator and what replaces its parts</text>
+<text x="976" y="28" class="tag mono" text-anchor="end">the core imports only the standard library</text>
+<text x="24" y="62" class="head" text-anchor="start">implementations</text>
+<text x="24" y="78" class="small" text-anchor="start">written against the contract, never a host</text>
+<text x="356" y="62" class="head acc" text-anchor="start">stage contract</text>
+<text x="356" y="78" class="small" text-anchor="start">what any implementation and any host agree on</text>
+<text x="704" y="62" class="head" text-anchor="start">hosts</text>
+<text x="704" y="78" class="small" text-anchor="start">an adapter maps the simulator's own function</text>
+<text x="704" y="92" class="small" text-anchor="start">onto the contract</text>
+<rect x="24" y="100.0" width="272" height="72.0" rx="3" class="box"/>
+<text x="33" y="118.0" class="head" text-anchor="start">typed equation</text>
+<text x="33" y="135.0" class="small" text-anchor="start">a few lines of text, compiled</text>
+<text x="33" y="149.0" class="small" text-anchor="start">NumPy, Warp or JAX backend</text>
+<text x="288" y="164.0" class="tag mono" text-anchor="end">phost-author</text>
+<rect x="24" y="184.0" width="272" height="72.0" rx="3" class="box"/>
+<text x="33" y="202.0" class="head" text-anchor="start">sandboxed kernel</text>
+<text x="33" y="219.0" class="small" text-anchor="start">your Python class, checked in</text>
+<text x="33" y="233.0" class="small" text-anchor="start">a sandbox before it runs</text>
+<text x="288" y="248.0" class="tag mono" text-anchor="end">phost-author</text>
+<rect x="24" y="268.0" width="272" height="72.0" rx="3" class="box"/>
+<text x="33" y="286.0" class="head" text-anchor="start">coupled-block Cholesky</text>
+<text x="33" y="303.0" class="small" text-anchor="start">a Warp solver, bound to two</text>
+<text x="33" y="317.0" class="small" text-anchor="start">solve stages</text>
+<text x="288" y="332.0" class="tag mono" text-anchor="end">phost-coupledchol</text>
+<rect x="24" y="352.0" width="272" height="72.0" rx="3" class="box"/>
+<text x="33" y="370.0" class="head" text-anchor="start">built-in laws</text>
+<text x="33" y="387.0" class="small" text-anchor="start">spring, damper, PD, probe:</text>
+<text x="33" y="401.0" class="small" text-anchor="start">NumPy and Warp versions</text>
+<text x="288" y="416.0" class="tag mono" text-anchor="end">phost</text>
+<rect x="24" y="436.0" width="272" height="72.0" rx="3" class="yours"/>
+<text x="33" y="454.0" class="head" text-anchor="start">yours</text>
+<text x="33" y="471.0" class="small" text-anchor="start">a class with the stage's entry</text>
+<text x="33" y="485.0" class="small" text-anchor="start">method, checked like the rest</text>
+<rect x="356" y="100" width="288" height="408" rx="3" class="corebox"/>
+<text x="366" y="122" class="bold small" text-anchor="start">ports</text>
+<text x="366" y="135" class="small" text-anchor="start">name, role in/out, dtype, shape</text>
+<text x="366" y="154" class="bold small" text-anchor="start">swap class</text>
+<text x="366" y="167" class="small" text-anchor="start">exact | approximate | model changing | observer</text>
+<text x="366" y="186" class="bold small" text-anchor="start">metrics + tolerances</text>
+<text x="366" y="199" class="small" text-anchor="start">what a run reports, and what may differ</text>
+<text x="366" y="218" class="bold small" text-anchor="start">float64 reference</text>
+<text x="366" y="231" class="small" text-anchor="start">shipped with the stage, or the implementation's own</text>
+<text x="366" y="250" class="bold small" text-anchor="start">judge</text>
+<text x="366" y="263" class="small" text-anchor="start">how a run of the stage is measured</text>
+<text x="366" y="282" class="bold small" text-anchor="start">extensions</text>
+<text x="366" y="295" class="small" text-anchor="start">optional facts, such as a matrix's sparsity</text>
+<path d="M366,308 L634,308" class="rule"/>
+<text x="366" y="324" class="bold small" text-anchor="start">six stages today</text>
+<text x="366" y="340" class="small mono" text-anchor="start">newton.linear_solve</text>
+<text x="506" y="340" class="tag" text-anchor="start">exact</text>
+<text x="366" y="354" class="small mono" text-anchor="start">effective.solve</text>
+<text x="506" y="354" class="tag" text-anchor="start">exact*</text>
+<text x="366" y="368" class="small mono" text-anchor="start">dof.passive_force</text>
+<text x="506" y="368" class="tag" text-anchor="start">model changing</text>
+<text x="366" y="382" class="small mono" text-anchor="start">control.law</text>
+<text x="506" y="382" class="tag" text-anchor="start">model changing</text>
+<text x="366" y="396" class="small mono" text-anchor="start">body.wrench</text>
+<text x="506" y="396" class="tag" text-anchor="start">model changing</text>
+<text x="366" y="410" class="small mono" text-anchor="start">probe.state</text>
+<text x="506" y="410" class="tag" text-anchor="start">observer</text>
+<text x="366" y="432" class="tag" text-anchor="start">* a typed solver step may declare itself approximate</text>
+<text x="366" y="445" class="tag" text-anchor="start">A host offers the stages it has: a chain has no bodies,</text>
+<text x="366" y="458" class="tag" text-anchor="start">so no body.wrench</text>
+<rect x="704" y="100.0" width="272" height="61.333333333333336" rx="3" class="hostbox"/>
+<text x="713" y="118.0" class="head" text-anchor="start">MuJoCo Warp</text>
+<text x="713" y="135.0" class="small" text-anchor="start">GPU, Warp arrays, CUDA graph</text>
+<text x="713" y="149.0" class="small" text-anchor="start">the worked example</text>
+<rect x="704" y="169.33333333333334" width="272" height="61.333333333333336" rx="3" class="hostbox"/>
+<text x="713" y="187.33333333333334" class="head" text-anchor="start">MJLab</text>
+<text x="713" y="204.33333333333334" class="small" text-anchor="start">wraps MuJoCo Warp's data;</text>
+<text x="713" y="218.33333333333334" class="small" text-anchor="start">tested against a stand-in</text>
+<rect x="704" y="238.66666666666669" width="272" height="61.333333333333336" rx="3" class="hostbox"/>
+<text x="713" y="256.6666666666667" class="head" text-anchor="start">spring-mass chain, NumPy</text>
+<text x="713" y="273.6666666666667" class="small" text-anchor="start">CPU; no MuJoCo, no GPU</text>
+<text x="713" y="287.6666666666667" class="small" text-anchor="start">its own names: x, v, a</text>
+<rect x="704" y="308.0" width="272" height="61.333333333333336" rx="3" class="hostbox"/>
+<text x="713" y="326.0" class="head" text-anchor="start">spring-mass chain, JAX</text>
+<text x="713" y="343.0" class="small" text-anchor="start">arrays that cannot be written in</text>
+<text x="713" y="357.0" class="small" text-anchor="start">place; the step compiles (XLA)</text>
+<rect x="704" y="377.33333333333337" width="272" height="61.333333333333336" rx="3" class="hostbox"/>
+<text x="713" y="395.33333333333337" class="head" text-anchor="start">fake host</text>
+<text x="713" y="412.33333333333337" class="small" text-anchor="start">no simulator: faulty runtimes</text>
+<text x="713" y="426.33333333333337" class="small" text-anchor="start">to test the check itself</text>
+<rect x="704" y="446.66666666666674" width="272" height="61.333333333333336" rx="3" class="yours"/>
+<text x="713" y="464.66666666666674" class="head" text-anchor="start">your simulator</text>
+<text x="713" y="481.66666666666674" class="small" text-anchor="start">a Host: facts(), stages(), meter()</text>
+<text x="713" y="495.66666666666674" class="small" text-anchor="start">and a table per stage</text>
+<path d="M298,136.0 L353,136.0" class="aarrow"/>
+<path d="M298,220.0 L353,220.0" class="aarrow"/>
+<path d="M298,304.0 L353,304.0" class="aarrow"/>
+<path d="M298,388.0 L353,388.0" class="aarrow"/>
+<path d="M298,472.0 L353,472.0" class="aarrow"/>
+<path d="M702,130.66666666666666 L647,130.66666666666666" class="aarrow"/>
+<path d="M702,200.0 L647,200.0" class="aarrow"/>
+<path d="M702,269.33333333333337 L647,269.33333333333337" class="aarrow"/>
+<path d="M702,338.6666666666667 L647,338.6666666666667" class="aarrow"/>
+<path d="M702,408.00000000000006 L647,408.00000000000006" class="aarrow"/>
+<path d="M702,477.3333333333334 L647,477.3333333333334" class="aarrow"/>
+<rect x="24" y="536" width="16" height="16" rx="2" class="badge"/>
+<text x="32" y="548" class="badgetx">1</text>
+<text x="48" y="548" class="head" text-anchor="start">Install</text>
+<text x="109.0" y="548" class="sub" text-anchor="start">a session puts an implementation behind a stage for the length of a with-block</text>
+<rect x="24" y="562" width="172" height="56" rx="3" class="corebox"/>
+<text x="33" y="580" class="bold mono" text-anchor="start">select</text>
+<text x="33" y="597" class="small" text-anchor="start">Selection(stage, impl, params)</text>
+<path d="M198,590 L220,590" class="aarrow"/>
+<rect x="223" y="562" width="172" height="56" rx="3" class="corebox"/>
+<text x="232" y="580" class="bold mono" text-anchor="start">guard</text>
+<text x="232" y="597" class="small" text-anchor="start">the hooked function's source</text>
+<text x="232" y="611" class="small" text-anchor="start">must be one that was reviewed</text>
+<path d="M397,590 L419,590" class="aarrow"/>
+<rect x="422" y="562" width="172" height="56" rx="3" class="corebox"/>
+<text x="431" y="580" class="bold mono" text-anchor="start">install</text>
+<text x="431" y="597" class="small" text-anchor="start">one scoped patch; none</text>
+<text x="431" y="611" class="small" text-anchor="start">nested; one process lock</text>
+<path d="M596,590 L618,590" class="aarrow"/>
+<rect x="621" y="562" width="172" height="56" rx="3" class="corebox"/>
+<text x="630" y="580" class="bold mono" text-anchor="start">run</text>
+<text x="630" y="597" class="small" text-anchor="start">the host steps; its meter</text>
+<text x="630" y="611" class="small" text-anchor="start">counts calls on the device</text>
+<path d="M795,590 L817,590" class="aarrow"/>
+<rect x="820" y="562" width="172" height="56" rx="3" class="corebox"/>
+<text x="829" y="580" class="bold mono" text-anchor="start">restore</text>
+<text x="829" y="597" class="small" text-anchor="start">on every way out,</text>
+<text x="829" y="611" class="small" text-anchor="start">including an exception</text>
+<rect x="24" y="638" width="16" height="16" rx="2" class="badge"/>
+<text x="32" y="650" class="badgetx">2</text>
+<text x="48" y="650" class="head" text-anchor="start">Check</text>
+<text x="95.0" y="650" class="sub" text-anchor="start">the same check gates a submission, a graph run and a leaderboard entry</text>
+<rect x="24" y="664" width="226" height="56" rx="3" class="corebox"/>
+<text x="33" y="682" class="bold mono" text-anchor="start">drive the host</text>
+<text x="33" y="699" class="small" text-anchor="start">a real step on a scene,</text>
+<text x="33" y="713" class="small" text-anchor="start">each runtime call recorded</text>
+<path d="M252,692 L269,692" class="aarrow"/>
+<rect x="272" y="664" width="226" height="56" rx="3" class="corebox"/>
+<text x="281" y="682" class="bold mono" text-anchor="start">what it did</text>
+<text x="281" y="699" class="small" text-anchor="start">inputs it was handed, outputs it</text>
+<text x="281" y="713" class="small" text-anchor="start">wrote, as the device saw them</text>
+<path d="M500,692 L517,692" class="aarrow"/>
+<rect x="520" y="664" width="226" height="56" rx="3" class="corebox"/>
+<text x="529" y="682" class="bold mono" text-anchor="start">float64 reference</text>
+<text x="529" y="699" class="small" text-anchor="start">same inputs, in NumPy: the stage's</text>
+<text x="529" y="713" class="small" text-anchor="start">reference or the implementation's</text>
+<path d="M748,692 L765,692" class="aarrow"/>
+<rect x="768" y="664" width="226" height="56" rx="3" class="corebox"/>
+<text x="777" y="682" class="bold mono" text-anchor="start">judge by class</text>
+<text x="777" y="699" class="small" text-anchor="start">metrics within the contract's</text>
+<text x="777" y="713" class="small" text-anchor="start">tolerances; inputs left alone</text>
+<path d="M24,738 L976,738" class="rule"/>
+<text x="24" y="758" class="small" text-anchor="start">built on it, as separate packages:</text>
+<text x="24" y="774" class="small" text-anchor="start">phost-lab times a graph in an isolated worker; phost-score gates and ranks; phost-dash is the browser view; phost-agent lets models search.</text>
 </svg>

@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 618" width="1000" height="618" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">Example host: where phost attaches to MuJoCo Warp's step</title>
+<desc id="dsc">One host in detail. Panel 1: the MuJoCo Warp step as six functions with six numbered splice points, and a table of what each splice reads and writes. Panel 2: one splice: derive the contract's ports from the host's device arrays, call the implementation, write back, with a source-hash guard and a scoped install. Other hosts bind the same contracts with their own hooks.</desc>
+<style>
+  :root { --bg:#ffffff; --ink:#1b1b1a; --ink2:#4a4945; --muted:#66645f; --line:#8c8a84; --rule:#d6d5cf;
+          --host:#efeeea; --accent:#1f5fbf; --accentfill:#e8f0fb; --onaccent:#ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --ink:#ecebe7; --ink2:#c2c1ba; --muted:#8f8d86; --line:#77756f; --rule:#34332f;
+            --host:#242422; --accent:#6ea2f0; --accentfill:#1b2a40; --onaccent:#0d1726; }
+  }
+  text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); font-size: 12px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  .title { font-size: 16px; font-weight: 700; }
+  .head { font-size: 13px; font-weight: 700; }
+  .sub { fill: var(--ink2); }
+  .small { font-size: 11px; fill: var(--ink2); }
+  .tag { font-size: 10.5px; fill: var(--muted); }
+  .bold { font-weight: 700; }
+  .acc { fill: var(--accent); }
+  .mut { fill: var(--muted); }
+  .box { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+  .hostbox { fill: var(--host); stroke: var(--line); stroke-width: 1; }
+  .phostbox { fill: var(--accentfill); stroke: var(--accent); stroke-width: 1; }
+  .rule { stroke: var(--rule); stroke-width: 1; fill: none; }
+  .ln { stroke: var(--line); stroke-width: 1; fill: none; }
+  .arrow { stroke: var(--ink2); stroke-width: 1.2; fill: none; marker-end: url(#h); }
+  .aarrow { stroke: var(--accent); stroke-width: 1.2; fill: none; marker-end: url(#ha); }
+  .leader { stroke: var(--accent); stroke-width: 1; fill: none; }
+  .badge { fill: var(--accent); }
+  .badgetx { fill: var(--onaccent); font-size: 10.5px; font-weight: 700; text-anchor: middle; }
+</style>
+<defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--ink2)"/></marker><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--accent)"/></marker></defs>
+<rect x="0" y="0" width="1000" height="618" class=""/>
+<rect x="0" y="0" width="1000" height="618" style="fill:var(--bg)"/>
+<text x="24" y="28" class="title" text-anchor="start">Example host: where phost attaches to MuJoCo Warp's step</text>
+<text x="976" y="28" class="tag mono" text-anchor="end">reviewed build: mujoco_warp 3.17.0</text>
+<text x="24" y="62" class="head" text-anchor="start">1  The host step</text>
+<text x="150" y="62" class="sub" text-anchor="start">mjw.step(m, d), captured as one CUDA graph. Gray boxes are the host's functions; numbered squares are where phost can splice.</text>
+<line x1="24.0" y1="88" x2="831.2" y2="88" class="ln"/>
+<line x1="24.0" y1="88" x2="24.0" y2="95" class="ln"/>
+<line x1="831.2" y1="88" x2="831.2" y2="95" class="ln"/>
+<text x="427.6" y="83" class="small mono" text-anchor="middle">forward(m, d)</text>
+<rect x="24.0" y="108" width="148" height="58" class="hostbox"/>
+<text x="33.0" y="127" class="mono bold" text-anchor="start">fwd_position</text>
+<text x="33.0" y="144" class="small mono" text-anchor="start">kinematics, crb</text>
+<text x="33.0" y="158" class="small mono" text-anchor="start">collision, efc rows</text>
+<rect x="188.8" y="108" width="148" height="58" class="hostbox"/>
+<text x="197.8" y="127" class="mono bold" text-anchor="start">fwd_velocity</text>
+<text x="197.8" y="144" class="small mono" text-anchor="start">com_vel, rne</text>
+<text x="197.8" y="158" class="small mono" text-anchor="start">passive.passive</text>
+<rect x="353.6" y="108" width="148" height="58" class="hostbox"/>
+<text x="362.6" y="127" class="mono bold" text-anchor="start">fwd_actuation</text>
+<text x="362.6" y="144" class="small mono" text-anchor="start">actuator_force</text>
+<text x="362.6" y="158" class="small mono" text-anchor="start">-&gt; qfrc_actuator</text>
+<rect x="518.4000000000001" y="108" width="148" height="58" class="hostbox"/>
+<text x="527.4000000000001" y="127" class="mono bold" text-anchor="start">fwd_acceleration</text>
+<text x="527.4000000000001" y="144" class="small mono" text-anchor="start">xfrc_accumulate</text>
+<text x="527.4000000000001" y="158" class="small mono" text-anchor="start">M^-1 qfrc_smooth</text>
+<rect x="683.2" y="108" width="148" height="58" class="hostbox"/>
+<text x="692.2" y="127" class="mono bold" text-anchor="start">solver.solve</text>
+<text x="692.2" y="144" class="small mono" text-anchor="start">Newton: build H,</text>
+<text x="692.2" y="158" class="small mono" text-anchor="start">factor, line search</text>
+<rect x="848.0" y="108" width="148" height="58" class="hostbox"/>
+<text x="857.0" y="127" class="mono bold" text-anchor="start">integrator</text>
+<text x="857.0" y="144" class="small mono" text-anchor="start">euler | rk4 |</text>
+<text x="857.0" y="158" class="small mono" text-anchor="start">implicit | discrete</text>
+<path d="M173.0,137.0 H187.8" class="arrow"/>
+<path d="M337.8,137.0 H352.6" class="arrow"/>
+<path d="M502.6,137.0 H517.4000000000001" class="arrow"/>
+<path d="M667.4000000000001,137.0 H682.2" class="arrow"/>
+<path d="M832.2,137.0 H847.0" class="arrow"/>
+<line x1="375.6" y1="107" x2="375.6" y2="95" class="leader"/>
+<rect x="367.6" y="79" width="16" height="16" class="badge"/>
+<text x="375.6" y="91" class="badgetx">1</text>
+<line x1="210.8" y1="167" x2="210.8" y2="179" class="leader"/>
+<rect x="202.8" y="179" width="16" height="16" class="badge"/>
+<text x="210.8" y="191" class="badgetx">2</text>
+<line x1="540.4000000000001" y1="107" x2="540.4000000000001" y2="95" class="leader"/>
+<rect x="532.4000000000001" y="79" width="16" height="16" class="badge"/>
+<text x="540.4000000000001" y="91" class="badgetx">3</text>
+<line x1="540.4000000000001" y1="167" x2="540.4000000000001" y2="179" class="leader"/>
+<rect x="532.4000000000001" y="179" width="16" height="16" class="badge"/>
+<text x="540.4000000000001" y="191" class="badgetx">4</text>
+<line x1="705.2" y1="167" x2="705.2" y2="179" class="leader"/>
+<rect x="697.2" y="179" width="16" height="16" class="badge"/>
+<text x="705.2" y="191" class="badgetx">5</text>
+<line x1="809.2" y1="107" x2="809.2" y2="95" class="leader"/>
+<rect x="801.2" y="79" width="16" height="16" class="badge"/>
+<text x="809.2" y="91" class="badgetx">6</text>
+<text x="24" y="214" class="tag mono" text-anchor="start">#</text>
+<text x="48" y="214" class="tag mono" text-anchor="start">stage</text>
+<text x="190" y="214" class="tag mono" text-anchor="start">hooked function</text>
+<text x="418" y="214" class="tag mono" text-anchor="start">runs</text>
+<text x="474" y="214" class="tag mono" text-anchor="start">ports in</text>
+<text x="654" y="214" class="tag mono" text-anchor="start">ports out</text>
+<text x="858" y="214" class="tag mono" text-anchor="start">swap class</text>
+<line x1="24" y1="221" x2="976" y2="221" class="rule"/>
+<rect x="24" y="228" width="16" height="16" class="badge"/>
+<text x="32" y="240" class="badgetx">1</text>
+<text x="56" y="240" class="mono bold small" text-anchor="start">control.law</text>
+<text x="190" y="240" class="mono small" text-anchor="start">forward.fwd_actuation</text>
+<text x="418" y="240" class="mono small" text-anchor="start">before</text>
+<text x="474" y="240" class="mono small" text-anchor="start">length, velocity, time</text>
+<text x="654" y="240" class="mono small" text-anchor="start">ctrl</text>
+<text x="858" y="240" class="small" text-anchor="start">model changing</text>
+<line x1="24" y1="248" x2="976" y2="248" class="rule"/>
+<rect x="24" y="250" width="16" height="16" class="badge"/>
+<text x="32" y="262" class="badgetx">2</text>
+<text x="56" y="262" class="mono bold small" text-anchor="start">dof.passive_force</text>
+<text x="190" y="262" class="mono small" text-anchor="start">passive.passive</text>
+<text x="418" y="262" class="mono small" text-anchor="start">after</text>
+<text x="474" y="262" class="mono small" text-anchor="start">q, v, time</text>
+<text x="654" y="262" class="mono small" text-anchor="start">force (+= qfrc_passive)</text>
+<text x="858" y="262" class="small" text-anchor="start">model changing</text>
+<line x1="24" y1="270" x2="976" y2="270" class="rule"/>
+<rect x="24" y="272" width="16" height="16" class="badge"/>
+<text x="32" y="284" class="badgetx">3</text>
+<text x="56" y="284" class="mono bold small" text-anchor="start">body.wrench</text>
+<text x="190" y="284" class="mono small" text-anchor="start">forward.xfrc_accumulate</text>
+<text x="418" y="284" class="mono small" text-anchor="start">before</text>
+<text x="474" y="284" class="mono small" text-anchor="start">xpos, cvel, time</text>
+<text x="654" y="284" class="mono small" text-anchor="start">wrench (d.xfrc_applied)</text>
+<text x="858" y="284" class="small" text-anchor="start">model changing</text>
+<line x1="24" y1="292" x2="976" y2="292" class="rule"/>
+<rect x="24" y="294" width="16" height="16" class="badge"/>
+<text x="32" y="306" class="badgetx">4</text>
+<text x="56" y="306" class="mono bold small" text-anchor="start">effective.solve</text>
+<text x="190" y="306" class="mono small" text-anchor="start">derivative.eff_solve</text>
+<text x="418" y="306" class="mono small" text-anchor="start">instead</text>
+<text x="474" y="306" class="mono small" text-anchor="start">h, rhs</text>
+<text x="654" y="306" class="mono small" text-anchor="start">qacc</text>
+<text x="858" y="306" class="small" text-anchor="start">exact</text>
+<line x1="24" y1="314" x2="976" y2="314" class="rule"/>
+<rect x="24" y="316" width="16" height="16" class="badge"/>
+<text x="32" y="328" class="badgetx">5</text>
+<text x="56" y="328" class="mono bold small" text-anchor="start">newton.linear_solve</text>
+<text x="190" y="328" class="mono small" text-anchor="start">solver._cholesky_factorize_solve</text>
+<text x="418" y="328" class="mono small" text-anchor="start">instead</text>
+<text x="474" y="328" class="mono small" text-anchor="start">h, grad, active, refactor</text>
+<text x="654" y="328" class="mono small" text-anchor="start">search, search_dot, decrement</text>
+<text x="858" y="328" class="small" text-anchor="start">exact</text>
+<line x1="24" y1="336" x2="976" y2="336" class="rule"/>
+<rect x="24" y="338" width="16" height="16" class="badge"/>
+<text x="32" y="350" class="badgetx">6</text>
+<text x="56" y="350" class="mono bold small" text-anchor="start">probe.state</text>
+<text x="190" y="350" class="mono small" text-anchor="start">forward.forward</text>
+<text x="418" y="350" class="mono small" text-anchor="start">after</text>
+<text x="474" y="350" class="mono small" text-anchor="start">qpos, qvel, qacc, time</text>
+<text x="654" y="350" class="mono small" text-anchor="start">value (a buffer it owns)</text>
+<text x="858" y="350" class="small" text-anchor="start">observer</text>
+<line x1="24" y1="358" x2="976" y2="358" class="rule"/>
+<text x="24" y="376" class="small" text-anchor="start">Stage 4 exists only under the discrete integrator, which bypasses stages 1 and 2; stage 1 needs actuators. phost-lab applicability prints the full stage-by-scene table.</text>
+<text x="24" y="412" class="head" text-anchor="start">2  One splice</text>
+<text x="124" y="412" class="sub" text-anchor="start">what a Hook does when the host reaches the hooked function</text>
+<rect x="24" y="430" width="150" height="70" class="hostbox"/>
+<text x="33" y="449" class="mono bold small" text-anchor="start">host arrays</text>
+<text x="33" y="467" class="small" text-anchor="start">device, float32</text>
+<text x="33" y="481" class="small" text-anchor="start">qvel, xpos, M, efm_*</text>
+<rect x="194" y="430" width="190" height="70" class="phostbox"/>
+<text x="203" y="449" class="mono bold small" text-anchor="start">derive the ports</text>
+<text x="203" y="467" class="small" text-anchor="start">alias an array, or launch one</text>
+<text x="203" y="481" class="small" text-anchor="start">kernel (Launch) to build it</text>
+<rect x="404" y="430" width="232" height="70" class="phostbox"/>
+<text x="413" y="449" class="mono bold small" text-anchor="start">runtime.entry(system)</text>
+<text x="413" y="467" class="small" text-anchor="start">the implementation's Warp kernels,</text>
+<text x="413" y="481" class="small" text-anchor="start">on the host's stream, in the graph</text>
+<rect x="656" y="430" width="150" height="70" class="phostbox"/>
+<text x="665" y="449" class="mono bold small" text-anchor="start">write back</text>
+<text x="665" y="467" class="small" text-anchor="start">into the host's arrays</text>
+<text x="665" y="481" class="small" text-anchor="start">(Zero / Launch steps)</text>
+<rect x="826" y="430" width="150" height="70" class="hostbox"/>
+<text x="835" y="449" class="mono bold small" text-anchor="start">host function</text>
+<text x="835" y="467" class="small" text-anchor="start">runs after, runs before,</text>
+<text x="835" y="481" class="small" text-anchor="start">or is skipped (instead)</text>
+<path d="M175,465.0 H193" class="aarrow"/>
+<path d="M385,465.0 H403" class="aarrow"/>
+<path d="M637,465.0 H655" class="aarrow"/>
+<path d="M807,465.0 H825" class="arrow"/>
+<text x="194" y="514" class="tag mono" text-anchor="start">phost</text>
+<text x="404" y="514" class="tag mono" text-anchor="start">phost-author, -coupledchol, yours</text>
+<text x="24" y="514" class="tag mono" text-anchor="start">MuJoCo Warp</text>
+<text x="826" y="514" class="tag mono" text-anchor="start">MuJoCo Warp</text>
+<text x="656" y="514" class="tag mono" text-anchor="start">phost</text>
+<text x="24" y="538" class="mono bold small" text-anchor="start">guard</text>
+<text x="78" y="538" class="small" text-anchor="start">The hooked function's source hash must be in the reviewed table for this build, or the session refuses to install.</text>
+<text x="24" y="556" class="mono bold small" text-anchor="start">scope</text>
+<text x="78" y="556" class="small" text-anchor="start">The patch holds for the length of a with-block and is removed on every way out of it, including an exception.</text>
+<text x="24" y="574" class="mono bold small" text-anchor="start">meter</text>
+<text x="78" y="574" class="small" text-anchor="start">Calls are counted on the device, so every replay of a captured graph counts (RK4 runs the forward pass four times).</text>
+<line x1="24" y1="592" x2="976" y2="592" class="rule"/>
+<text x="24" y="610" class="small" text-anchor="start">One host of several. The NumPy and JAX chain hosts bind the same contracts to their own functions; see architecture.svg.</text>
+</svg>
