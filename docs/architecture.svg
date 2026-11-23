@@ -56,8 +56,8 @@
 <text x="288" y="248.0" class="tag mono" text-anchor="end">phost-author</text>
 <rect x="24" y="268.0" width="272" height="72.0" rx="3" class="box"/>
 <text x="33" y="286.0" class="head" text-anchor="start">coupled-block Cholesky</text>
-<text x="33" y="303.0" class="small" text-anchor="start">a Warp solver, bound to two</text>
-<text x="33" y="317.0" class="small" text-anchor="start">solve stages</text>
+<text x="33" y="303.0" class="small" text-anchor="start">Warp and NumPy backends, for</text>
+<text x="33" y="317.0" class="small" text-anchor="start">two solve stages</text>
 <text x="288" y="332.0" class="tag mono" text-anchor="end">phost-coupledchol</text>
 <rect x="24" y="352.0" width="272" height="72.0" rx="3" class="box"/>
 <text x="33" y="370.0" class="head" text-anchor="start">built-in laws</text>

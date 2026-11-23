@@ -215,3 +215,16 @@ def test_applied_explicitly_the_same_law_is_a_different_trajectory(registry):
         for _ in range(20):
             explicit.step()
     assert np.abs(implicit.data.x - explicit.data.x).max() > 1e-5
+
+
+def test_the_facts_say_which_array_type_a_host_hands_to_stages():
+    """An implementation that needs one array type (Warp arrays, say) can refuse a host that hands it another, from facts alone."""
+    from phost.testing.fake import FakeHost
+    assert ChainHost(make_model(8, 2), worlds=1).facts().backend == "numpy"
+    assert FakeHost().facts().backend == "numpy"
+
+
+def test_the_jax_chain_says_its_arrays_are_jax():
+    pytest.importorskip("jax")
+    from phost.hosts.jaxchain import JaxChainHost
+    assert JaxChainHost(make_model(8, 2), worlds=1).facts().backend == "jax"

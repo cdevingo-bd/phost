@@ -40,6 +40,7 @@ class ModelFacts:
     sleep: bool = False
     device_kind: str = "cpu"
     extra: Mapping[str, Any] = field(default_factory=dict)
+    backend: str = "numpy"       # the array type the stages' ports carry (``Host.backend``): "numpy", "warp" or "jax"
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ class StageBinding:
 class Host(abc.ABC):
     info: HostInfo
     capabilities: Capability
-    backend: str = "numpy"        # array type the stages' ports carry: "numpy" or "warp"
+    backend: str = "numpy"        # array type the stages' ports carry: "numpy", "warp" or "jax" (also in ``ModelFacts.backend``)
 
     @abc.abstractmethod
     def facts(self) -> ModelFacts: ...

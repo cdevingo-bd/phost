@@ -150,7 +150,7 @@ class FakeHost(Host):
 
     # -- Host ---------------------------------------------------------------------------------
     def facts(self) -> ModelFacts:
-        return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu",
+        return ModelFacts(nv=self.model.nv, world_count=self.data.nworld, device_kind="cpu", backend=self.backend,
                           extra=dict(nq=self.model.nq, nu=self.model.nu, nhistory=0,
                                      scalar_dofs=int(self.model.scalar.sum())))
 

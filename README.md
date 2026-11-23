@@ -99,7 +99,8 @@ with phost.Session(host, [phost.Selection("newton.linear_solve", coupled.SCAN)])
 A host is a subclass of `phost.host.Host`, and the core needs nothing else from a simulator:
 
 - `info` and `capabilities`: who it is, and whether stages can be replaced;
-- `facts()`: portable facts an implementation checks to decide whether it applies (`nv`, world count, solver, integrator, device kind);
+- `facts()`: portable facts an implementation checks to decide whether it applies (`nv`, world count, solver, integrator, device kind, and `backend`: the array type its stages carry, so an implementation
+  that needs Warp arrays can refuse a NumPy host);
 - `stages()`: a `StageBinding` for each stage it offers: the contract, the function to patch with a source-hash guard for each
   assumption, how a call becomes the contract's ports (a `Hook` table, or a function written by hand), why a stage cannot be
   installed on this model, how to time the host's own version, and, if it can say, the matrix's sparsity;
@@ -115,7 +116,7 @@ phost is one of seven packages. None is on PyPI yet, so install from a clone, `p
 | package | what it is |
 | --- | --- |
 | [phost](https://github.com/cdevingo-bd/phost) | this: stage contracts, the guarded install, host adapters, the contract check |
-| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | a coupled-block Cholesky solver in Warp, as an implementation of two stages |
+| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | a coupled-block Cholesky solver (a Warp backend and a NumPy one), as an implementation of two stages |
 | [phost-lab](https://github.com/cdevingo-bd/phost-lab) | runs a graph of implementations on any engine in an isolated worker; timing, profile, opportunity and applicability reports |
 | [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations compiled to NumPy, Warp or JAX, and a sandbox for submitted kernels |
 | [phost-score](https://github.com/cdevingo-bd/phost-score) | gates by swap class, a Pareto board, a hash-chained ledger |

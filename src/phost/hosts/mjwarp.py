@@ -170,7 +170,7 @@ class MJWarpHost(Host):
             nv=int(m.nv), world_count=int(self.data.nworld), solver=t.SolverType(m.opt.solver).name.lower(),
             integrator=t.IntegratorType(m.opt.integrator).name.lower(), cone=t.ConeType(m.opt.cone).name.lower(),
             sparse=bool(m.is_sparse), sleep=bool(enable & t.EnableBit.SLEEP),
-            device_kind="cuda" if self.device.is_cuda else "cpu",
+            device_kind="cuda" if self.device.is_cuda else "cpu", backend=self.backend,
             extra={"device": str(self.device), "nq": int(m.nq), "nu": int(m.nu),
                    "nhistory": int(getattr(m, "nhistory", 0)), "scalar_dofs": int(self._scalar_dofs()[0].sum())})
 
