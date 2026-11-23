@@ -111,20 +111,27 @@ run scenes of a new simulator through phost-lab, add an `Engine` there (see its 
 
 ## The set
 
-phost is one of seven packages. None is on PyPI yet, so install from a clone, `phost` first:
+phost is one of seven packages. None is on PyPI yet, so install from a clone, `phost` first.
+
+The core is four packages: the contracts, the lab that measures, the tools that author, and the scoring.
 
 | package | what it is |
 | --- | --- |
 | [phost](https://github.com/cdevingo-bd/phost) | this: stage contracts, the guarded install, host adapters, the contract check |
-| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | a coupled-block Cholesky solver (a Warp backend and a NumPy one), as an implementation of two stages |
 | [phost-lab](https://github.com/cdevingo-bd/phost-lab) | runs a graph of implementations on any engine in an isolated worker; timing, profile, opportunity and applicability reports |
 | [phost-author](https://github.com/cdevingo-bd/phost-author) | typed equations compiled to NumPy, Warp or JAX, and a sandbox for submitted kernels |
 | [phost-score](https://github.com/cdevingo-bd/phost-score) | gates by swap class, a Pareto board, a hash-chained ledger |
-| [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local browser view over the above; the work stays in the lab's workers |
+
+Utilities, built on the core and not needed by it:
+
+| package | what it is |
+| --- | --- |
+| [phost-coupledchol](https://github.com/cdevingo-bd/phost-coupledchol) | a coupled-block Cholesky solver (a Warp backend and a NumPy one), as an implementation of two stages |
+| [phost-dash](https://github.com/cdevingo-bd/phost-dash) | a local browser view over the core; the work stays in the lab's workers |
 | [phost-agent](https://github.com/cdevingo-bd/phost-agent) | models compete on a leaderboard behind a funnel of cheap checks, with a memo, a device lease and budgets; any provider |
 
 ```
-git clone https://github.com/cdevingo-bd/phost && pip install -e phost     # repeat for the others, in the order above
+git clone https://github.com/cdevingo-bd/phost && pip install -e phost     # repeat for each other package you want
 ```
 
 The chain hosts need NumPy (and JAX for `jaxchain`). The GPU host is tested against the MuJoCo Warp 3.17.0 source build (with
